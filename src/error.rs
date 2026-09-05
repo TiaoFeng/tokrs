@@ -2,15 +2,21 @@ use std::{error::Error, fmt, path::Path};
 
 #[derive(Debug)]
 pub enum AppError {
+    #[allow(dead_code)]
     DoNotFoundAnyFiles,
     Io {
         operation: &'static str,
         path: String,
         source: std::io::Error,
     },
+    #[allow(dead_code)]
     Corrupted {
         path: String,
         source: serde_json::Error,
+    },
+    Sqlite {
+        path: String,
+        source: rusqlite::Error,
     },
 }
 
@@ -18,6 +24,13 @@ pub enum AppError {
 pub fn io_err(operation: &'static str, path: &Path, err: std::io::Error) -> AppError {
     AppError::Io {
         operation,
+        path: path.to_string_lossy().to_string(),
+        source: err,
+    }
+}
+
+pub fn sqlite_err(path: &Path, err: rusqlite::Error) -> AppError {
+    AppError::Sqlite {
         path: path.to_string_lossy().to_string(),
         source: err,
     }
@@ -39,6 +52,9 @@ impl fmt::Display for AppError {
             AppError::Corrupted { path, source } => {
                 write!(f, "task file '{}' is corrupted: {}", path, source)
             }
+            AppError::Sqlite { path, source } => {
+                write!(f, "sqlite error on '{}': {}", path, source)
+            }
         }
     }
 }
@@ -52,6 +68,7 @@ impl Error for AppError {
                 source,
             } => Some(source),
             AppError::Corrupted { path: _, source } => Some(source),
+            AppError::Sqlite { path: _, source } => Some(source),
             _ => None,
         }
     }

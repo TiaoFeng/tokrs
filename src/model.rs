@@ -1,0 +1,84 @@
+use std::fmt;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum AppKind {
+    Claude,
+    Codex,
+    OpenCode,
+}
+
+impl AppKind {
+    pub const ALL: [AppKind; 3] = [AppKind::Claude, AppKind::Codex, AppKind::OpenCode];
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AppKind::Claude => "claude",
+            AppKind::Codex => "codex",
+            AppKind::OpenCode => "opencode",
+        }
+    }
+}
+
+impl fmt::Display for AppKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for AppKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "claude" => Ok(AppKind::Claude),
+            "codex" => Ok(AppKind::Codex),
+            "opencode" => Ok(AppKind::OpenCode),
+            other => Err(format!(
+                "unknown app '{other}', expected one of: claude, codex, opencode"
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct UsageEntry {
+    pub app: AppKind,
+    pub model: String,
+    #[allow(dead_code)]
+    pub session_id: Option<String>,
+    pub created_at: i64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+}
+
+impl UsageEntry {
+    #[cfg(test)]
+    pub fn total_tokens(&self) -> u64 {
+        self.input_tokens + self.output_tokens + self.cache_read_tokens + self.cache_creation_tokens
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct TokenTotals {
+    pub requests: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+}
+
+impl TokenTotals {
+    pub fn add_entry(&mut self, entry: &UsageEntry) {
+        self.requests += 1;
+        self.input_tokens += entry.input_tokens;
+        self.output_tokens += entry.output_tokens;
+        self.cache_read_tokens += entry.cache_read_tokens;
+        self.cache_creation_tokens += entry.cache_creation_tokens;
+    }
+
+    pub fn total_tokens(&self) -> u64 {
+        self.input_tokens + self.output_tokens + self.cache_read_tokens + self.cache_creation_tokens
+    }
+}
