@@ -6,8 +6,6 @@ use std::{error::Error, fmt, path::Path};
 
 #[derive(Debug)]
 pub enum AppError {
-    #[allow(dead_code)]
-    DoNotFoundAnyFiles,
     Io {
         operation: &'static str,
         path: String,
@@ -50,9 +48,6 @@ pub fn sqlite_err(path: &Path, err: rusqlite::Error) -> AppError {
 impl fmt::Display for AppError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AppError::DoNotFoundAnyFiles => {
-                write!(f, "Do not found any files")
-            }
             AppError::Io {
                 operation,
                 path,
@@ -80,7 +75,6 @@ impl Error for AppError {
             } => Some(source),
             AppError::Corrupted { path: _, source } => Some(source),
             AppError::Sqlite { path: _, source } => Some(source),
-            _ => None,
         }
     }
 }

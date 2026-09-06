@@ -32,7 +32,4 @@ fn test_err_display() {
             corrupted.source().unwrap()
         )
     );
-
-    let do_not_found_any_file = AppError::DoNotFoundAnyFiles;
-    assert_eq!(do_not_found_any_file.to_string(), "Do not found any files");
 }
