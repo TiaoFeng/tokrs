@@ -71,19 +71,20 @@ fn parse_session(value: &Value, candidates: &mut HashMap<String, UsageEntry>) {
             .get("timestamp")
             .and_then(load::timestamp_to_epoch)
             .unwrap_or_else(load::now_epoch);
+        // gemini 无自报成本, 待定价表估价; 思考 token 按输出计费, 并入 output
         candidates.insert(
             dedup_key,
-            UsageEntry {
-                app: AppKind::Gemini,
+            UsageEntry::new(
+                AppKind::Gemini,
                 model,
-                session_id: session_id.clone(),
+                session_id.clone(),
                 created_at,
-                input_tokens: input,
-                // 思考 token 按输出计费, 并入 output
-                output_tokens: output + thoughts,
-                cache_read_tokens: cached,
-                cache_creation_tokens: 0,
-            },
+                input,
+                output + thoughts,
+                cached,
+                0,
+                None,
+            ),
         );
     }
 }

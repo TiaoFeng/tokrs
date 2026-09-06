@@ -76,22 +76,56 @@ pub struct UsageEntry {
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
     pub cache_creation_tokens: u64,
+    /// 上游自报成本(USD), 仅当来源可信且 >0 时填充
+    pub self_cost_usd: Option<f64>,
+    /// 最终成本(USD): 自报优先, 否则由定价表估价, 均无则 None(计入 unpriced)
+    pub cost_usd: Option<f64>,
 }
 
 impl UsageEntry {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        app: AppKind,
+        model: String,
+        session_id: Option<String>,
+        created_at: i64,
+        input_tokens: u64,
+        output_tokens: u64,
+        cache_read_tokens: u64,
+        cache_creation_tokens: u64,
+        self_cost_usd: Option<f64>,
+    ) -> Self {
+        Self {
+            app,
+            model,
+            session_id,
+            created_at,
+            input_tokens,
+            output_tokens,
+            cache_read_tokens,
+            cache_creation_tokens,
+            self_cost_usd,
+            cost_usd: None,
+        }
+    }
+
     #[cfg(test)]
     pub fn total_tokens(&self) -> u64 {
         self.input_tokens + self.output_tokens + self.cache_read_tokens + self.cache_creation_tokens
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub struct TokenTotals {
     pub requests: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
     pub cache_creation_tokens: u64,
+    /// 已确定成本的请求成本合计(USD), 含自报与估价
+    pub cost_usd: f64,
+    /// 无任何成本来源的请求数, 成本合计不含这些请求
+    pub unpriced: u64,
 }
 
 impl TokenTotals {
@@ -101,6 +135,10 @@ impl TokenTotals {
         self.output_tokens += entry.output_tokens;
         self.cache_read_tokens += entry.cache_read_tokens;
         self.cache_creation_tokens += entry.cache_creation_tokens;
+        match entry.cost_usd {
+            Some(cost) => self.cost_usd += cost,
+            None => self.unpriced += 1,
+        }
     }
 
     pub fn total_tokens(&self) -> u64 {

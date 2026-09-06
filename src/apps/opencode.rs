@@ -89,16 +89,20 @@ fn parse_message(data: &str, session_id: &str, entries: &mut Vec<UsageEntry>) {
         .and_then(load::timestamp_to_epoch)
         .unwrap_or_else(load::now_epoch);
 
-    entries.push(UsageEntry {
-        app: AppKind::OpenCode,
+    // opencode 自报聚合成本(USD), >0 时无条件优先于定价表
+    let self_cost = load::cost_get(&value, &["cost"]);
+
+    entries.push(UsageEntry::new(
+        AppKind::OpenCode,
         model,
-        session_id: Some(session_id.to_string()),
+        Some(session_id.to_string()),
         created_at,
-        input_tokens: input,
-        output_tokens: output + reasoning,
-        cache_read_tokens: cache_read,
-        cache_creation_tokens: cache_write,
-    });
+        input,
+        output + reasoning,
+        cache_read,
+        cache_write,
+        self_cost,
+    ));
 }
 
 #[cfg(test)]

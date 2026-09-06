@@ -70,6 +70,17 @@ fn test_u64_and_str_get() {
 }
 
 #[test]
+fn test_cost_get() {
+    let v: Value =
+        serde_json::from_str(r#"{"a":{"b":0.5},"z":{"b":0},"n":{"b":-1},"s":{"b":"x"}}"#).unwrap();
+    assert_eq!(cost_get(&v, &["a", "b"]), Some(0.5));
+    assert_eq!(cost_get(&v, &["z", "b"]), None);
+    assert_eq!(cost_get(&v, &["n", "b"]), None);
+    assert_eq!(cost_get(&v, &["s", "b"]), None);
+    assert_eq!(cost_get(&v, &["nope"]), None);
+}
+
+#[test]
 fn test_timestamp_to_epoch() {
     let v: Value = serde_json::from_str(
         "[1767000000, 1767000000000, \"1767000000\", \"2026-09-01T00:00:00Z\"]",

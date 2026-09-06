@@ -101,6 +101,13 @@ pub fn str_get<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
     get_nested(value, keys).and_then(Value::as_str)
 }
 
+/// 从 JSON 值按路径取正成本(USD), 缺失/非正/非数返回 None
+pub fn cost_get(value: &Value, keys: &[&str]) -> Option<f64> {
+    let raw = get_nested(value, keys)?;
+    let cost = raw.as_f64()?;
+    (cost > 0.0 && cost.is_finite()).then_some(cost)
+}
+
 /// 时间戳自适应解析：数字（秒/毫秒）、数字字符串或 RFC3339，统一转 epoch 秒
 pub fn timestamp_to_epoch(value: &Value) -> Option<i64> {
     if let Some(n) = value.as_i64() {

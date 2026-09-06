@@ -4,8 +4,7 @@ pub mod gemini;
 pub mod grok;
 pub mod opencode;
 pub mod pi;
-
-mod prince;
+pub mod prince;
 
 use crate::error::AppError;
 use crate::model::{AppKind, UsageEntry};

@@ -129,18 +129,21 @@ fn parse_entry(
         Some(id) => format!("id:{kind}:{id}"),
         None => format!("hash:{kind}:{}", content_hash(entry, usage)),
     };
+    // pi 自报本轮聚合成本(USD), >0 时无条件优先于定价表
+    let self_cost = load::cost_get(usage, &["cost", "total"]);
     Some((
         key,
-        UsageEntry {
-            app: AppKind::Pi,
+        UsageEntry::new(
+            AppKind::Pi,
             model,
-            session_id: Some(session_id.to_string()),
+            Some(session_id.to_string()),
             created_at,
-            input_tokens: input,
-            output_tokens: output,
-            cache_read_tokens: cache_read,
-            cache_creation_tokens: cache_write,
-        },
+            input,
+            output,
+            cache_read,
+            cache_write,
+            self_cost,
+        ),
     ))
 }
 

@@ -39,7 +39,7 @@ fn test_parse_assistant_messages() {
         &conn,
         "m1",
         "s1",
-        r#"{"role":"assistant","modelID":"deepseek-v4","tokens":{"input":10,"output":5,"reasoning":3,"cache":{"read":100,"write":20}},"time":{"created":1788256800000,"completed":1788256801000}}"#,
+        r#"{"role":"assistant","modelID":"deepseek-v4","cost":0.42,"tokens":{"input":10,"output":5,"reasoning":3,"cache":{"read":100,"write":20}},"time":{"created":1788256800000,"completed":1788256801000}}"#,
     );
     insert_message(
         &conn,
@@ -73,6 +73,8 @@ fn test_parse_assistant_messages() {
     assert_eq!(e.cache_creation_tokens, 20);
     assert_eq!(e.created_at, 1_788_256_800);
     assert_eq!(e.session_id.as_deref(), Some("s1"));
+    // 自报聚合成本被捕获
+    assert_eq!(e.self_cost_usd, Some(0.42));
 }
 
 #[test]

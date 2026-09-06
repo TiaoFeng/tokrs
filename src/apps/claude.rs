@@ -72,16 +72,18 @@ fn parse_assistant_line(
         .get("timestamp")
         .and_then(load::timestamp_to_epoch)
         .unwrap_or_else(load::now_epoch);
-    let entry = UsageEntry {
-        app: AppKind::Claude,
+    // claude 无自报成本, 待定价表估价
+    let entry = UsageEntry::new(
+        AppKind::Claude,
         model,
         session_id,
         created_at,
-        input_tokens: input,
-        output_tokens: output,
-        cache_read_tokens: cache_read,
-        cache_creation_tokens: cache_creation,
-    };
+        input,
+        output,
+        cache_read,
+        cache_creation,
+        None,
+    );
     let candidate = Candidate {
         has_stop_reason: load::str_get(message, &["stop_reason"]).is_some(),
         entry,

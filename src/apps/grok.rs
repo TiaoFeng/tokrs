@@ -88,18 +88,22 @@ fn parse_updates(file: &Path, candidates: &mut HashMap<String, UsageEntry>) {
             }
             // grok 的 inputTokens 含 cachedRead, 归一为 fresh input
             let input = fresh_input(input, cached, 0);
+            // CLI 自报本轮精确成本, 1 tick = 1e-10 USD
+            let ticks = load::u64_get(counters, &["costUsdTicks"]);
+            let self_cost = (ticks > 0).then(|| ticks as f64 / 1e10);
             candidates.insert(
                 format!("{session_id}:{turn_key}:{model}"),
-                UsageEntry {
-                    app: AppKind::Grok,
-                    model: model.to_string(),
-                    session_id: Some(session_id.to_string()),
+                UsageEntry::new(
+                    AppKind::Grok,
+                    model.to_string(),
+                    Some(session_id.to_string()),
                     created_at,
-                    input_tokens: input,
-                    output_tokens: output,
-                    cache_read_tokens: cached,
-                    cache_creation_tokens: 0,
-                },
+                    input,
+                    output,
+                    cached,
+                    0,
+                    self_cost,
+                ),
             );
         }
     }

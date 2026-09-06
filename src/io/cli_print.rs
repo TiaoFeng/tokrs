@@ -6,7 +6,7 @@ use serde_json::json;
 
 use crate::model::TokenTotals;
 
-const HEADERS: [&str; 7] = [
+const HEADERS: [&str; 8] = [
     "Key",
     "Requests",
     "Input",
@@ -14,6 +14,7 @@ const HEADERS: [&str; 7] = [
     "Cache Read",
     "Cache Write",
     "Total",
+    "Cost",
 ];
 
 pub fn print_report(rows: &[(String, TokenTotals)], total: &TokenTotals, today: &TokenTotals) {
@@ -30,6 +31,12 @@ pub fn print_report(rows: &[(String, TokenTotals)], total: &TokenTotals, today: 
     }
     table.add_row(bold_row("Total", total));
     println!("{}", table);
+    if total.unpriced > 0 {
+        println!(
+            "  * {} request(s) unpriced, cost not counted",
+            total.unpriced
+        );
+    }
 }
 
 fn bold_row(key: &str, totals: &TokenTotals) -> Vec<Cell> {
@@ -59,7 +66,30 @@ fn totals_json(totals: &TokenTotals) -> serde_json::Value {
         "cache_read_tokens": totals.cache_read_tokens,
         "cache_creation_tokens": totals.cache_creation_tokens,
         "total_tokens": totals.total_tokens(),
+        "cost_usd": totals.cost_usd,
+        "unpriced": totals.unpriced,
     })
+}
+
+/// 成本单元格: 全部无价显示 "-", 有价显示美元(小额 4 位小数), 部分无价加 "*"
+fn cost_text(totals: &TokenTotals) -> String {
+    if totals.cost_usd == 0.0 && totals.unpriced > 0 {
+        return "-".to_string();
+    }
+    let s = fmt_usd(totals.cost_usd);
+    if totals.unpriced > 0 {
+        format!("{s}*")
+    } else {
+        s
+    }
+}
+
+fn fmt_usd(cost: f64) -> String {
+    if cost > 0.0 && cost < 0.01 {
+        format!("${cost:.4}")
+    } else {
+        format!("${cost:.2}")
+    }
 }
 
 fn row_cells(key: &str, totals: &TokenTotals) -> Vec<String> {
@@ -71,6 +101,7 @@ fn row_cells(key: &str, totals: &TokenTotals) -> Vec<String> {
         thousands(totals.cache_read_tokens),
         thousands(totals.cache_creation_tokens),
         thousands(totals.total_tokens()),
+        cost_text(totals),
     ]
 }
 
@@ -96,5 +127,28 @@ mod tests {
         assert_eq!(thousands(999), "999");
         assert_eq!(thousands(1_000), "1,000");
         assert_eq!(thousands(76_780_408), "76,780,408");
+    }
+
+    #[test]
+    fn test_cost_text() {
+        let all_unpriced = TokenTotals {
+            requests: 3,
+            unpriced: 3,
+            ..Default::default()
+        };
+        assert_eq!(cost_text(&all_unpriced), "-");
+        let partial = TokenTotals {
+            requests: 3,
+            cost_usd: 1.5,
+            unpriced: 1,
+            ..Default::default()
+        };
+        assert_eq!(cost_text(&partial), "$1.50*");
+        let small = TokenTotals {
+            requests: 1,
+            cost_usd: 0.0042,
+            ..Default::default()
+        };
+        assert_eq!(cost_text(&small), "$0.0042");
     }
 }

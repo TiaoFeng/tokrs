@@ -1,16 +1,17 @@
 use super::*;
 
 fn entry(app: AppKind, created_at: i64, input: u64, output: u64) -> UsageEntry {
-    UsageEntry {
+    UsageEntry::new(
         app,
-        model: "test-model".to_string(),
-        session_id: None,
+        "test-model".to_string(),
+        None,
         created_at,
-        input_tokens: input,
-        output_tokens: output,
-        cache_read_tokens: 0,
-        cache_creation_tokens: 0,
-    }
+        input,
+        output,
+        0,
+        0,
+        None,
+    )
 }
 
 fn local_noon(year: i32, month: u32, day: u32) -> i64 {
@@ -117,4 +118,15 @@ fn test_today_total_counts_only_today() {
     assert_eq!(today.input_tokens, 10);
     assert_eq!(today.output_tokens, 5);
     assert_eq!(today_total(&[]), TokenTotals::default());
+}
+
+#[test]
+fn test_totals_accumulate_cost_and_unpriced() {
+    let mut priced = entry(AppKind::Claude, 1, 10, 5);
+    priced.cost_usd = Some(0.25);
+    let unpriced = entry(AppKind::Claude, 2, 10, 5);
+    let total = grand_total(&[priced, unpriced]);
+    assert_eq!(total.requests, 2);
+    assert!((total.cost_usd - 0.25).abs() < f64::EPSILON);
+    assert_eq!(total.unpriced, 1);
 }

@@ -195,16 +195,18 @@ fn parse_token_count(
         .and_then(load::timestamp_to_epoch)
         .unwrap_or_else(load::now_epoch);
 
-    entries.push(UsageEntry {
-        app: AppKind::Codex,
+    // codex 无自报成本, 待定价表估价
+    entries.push(UsageEntry::new(
+        AppKind::Codex,
         model,
-        session_id: state.thread_id.clone(),
+        state.thread_id.clone(),
         created_at,
-        input_tokens: d_input,
-        output_tokens: d_output,
-        cache_read_tokens: d_cached,
-        cache_creation_tokens: d_write,
-    });
+        d_input,
+        d_output,
+        d_cached,
+        d_write,
+        None,
+    ));
 }
 
 fn delta_from_total(state: &mut FileState, counters: &Counters) -> [u64; 4] {

@@ -196,6 +196,19 @@ fn test_pure_cache_hit_kept_with_zero_fresh_input() {
 }
 
 #[test]
+fn test_cost_usd_ticks_captured() {
+    let base = temp_dir();
+    // 1 tick = 1e-10 USD: 338880000 -> $0.033888
+    let usage = r#"{"modelUsage":{"m":{"inputTokens":10,"outputTokens":1,"cachedReadTokens":0,"costUsdTicks":338880000}}}"#;
+    write_updates(&base, "sessions", "s", &[turn_line(TS, Some("p1"), usage)]);
+    let entries = collect_from(&base).unwrap();
+    assert_eq!(entries.len(), 1);
+    let cost = entries[0].self_cost_usd.unwrap();
+    assert!((cost - 0.033_888).abs() < 1e-12);
+    fs::remove_dir_all(&base).ok();
+}
+
+#[test]
 fn test_archived_converges_and_other_files_ignored() {
     let base = temp_dir();
     let lines = vec![turn_line(

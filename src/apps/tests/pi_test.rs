@@ -246,6 +246,24 @@ fn test_zero_and_malformed_skipped_with_header_ts_fallback() {
 }
 
 #[test]
+fn test_self_cost_capture() {
+    let base = temp_dir();
+    let usage = r#"{"input":1,"output":1,"cacheRead":0,"cacheWrite":0,"cost":{"total":0.123}}"#;
+    write_file(
+        &base,
+        "sc.jsonl",
+        &[
+            header("s-c", TS),
+            message_entry(Some("a1"), TS, "assistant", &model_field("m"), usage),
+        ],
+    );
+    let entries = collect_from(std::slice::from_ref(&base)).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].self_cost_usd, Some(0.123));
+    fs::remove_dir_all(&base).ok();
+}
+
+#[test]
 fn test_missing_roots_return_empty() {
     let base = temp_dir();
     fs::remove_dir_all(&base).unwrap();

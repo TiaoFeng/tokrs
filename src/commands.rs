@@ -87,7 +87,8 @@ pub fn run(cli: Cli) -> Result<(), AppError> {
             .collect()
     };
 
-    let entries = apps::collect(&app_kinds)?;
+    let mut entries = apps::collect(&app_kinds)?;
+    apps::prince::resolve(&mut entries);
     let entries = tokens::filter_by_range(entries, cli.since, cli.until);
     let total = tokens::grand_total(&entries);
     let today = tokens::today_total(&entries);
