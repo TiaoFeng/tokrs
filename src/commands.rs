@@ -88,7 +88,17 @@ pub fn run(cli: Cli) -> Result<(), AppError> {
     };
 
     let mut entries = apps::collect(&app_kinds)?;
-    apps::prince::resolve(&mut entries);
+    // 价目表: 损坏直接报错不回写; 新模型自动追加 null 模板(用全量模型, 先于日期过滤)
+    let pricing_path = apps::prince::pricing_path()?;
+    let mut table = apps::prince::load_pricing(&pricing_path)?;
+    let added = apps::prince::sync_models(&mut table, &pricing_path, &entries)?;
+    if added > 0 {
+        eprintln!(
+            "> added {added} model(s) to {} (prices null until filled in)",
+            pricing_path.display()
+        );
+    }
+    apps::prince::resolve(&mut entries, &table);
     let entries = tokens::filter_by_range(entries, cli.since, cli.until);
     let total = tokens::grand_total(&entries);
     let today = tokens::today_total(&entries);

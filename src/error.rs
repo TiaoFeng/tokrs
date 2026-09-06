@@ -61,7 +61,7 @@ impl fmt::Display for AppError {
                 write!(f, "failed to {} '{}': {}", operation, path, source)
             }
             AppError::Corrupted { path, source } => {
-                write!(f, "task file '{}' is corrupted: {}", path, source)
+                write!(f, "file '{}' is corrupted: {}", path, source)
             }
             AppError::Sqlite { path, source } => {
                 write!(f, "sqlite error on '{}': {}", path, source)

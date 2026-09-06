@@ -28,7 +28,7 @@ fn test_err_display() {
     assert_eq!(
         corrupted.to_string(),
         format!(
-            "task file 'test2.json' is corrupted: {}",
+            "file 'test2.json' is corrupted: {}",
             corrupted.source().unwrap()
         )
     );
