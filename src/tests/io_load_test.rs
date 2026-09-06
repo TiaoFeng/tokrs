@@ -81,6 +81,14 @@ fn test_cost_get() {
 }
 
 #[test]
+fn test_bool_get() {
+    let v: Value = serde_json::from_str(r#"{"t":{"b":true},"x":{"b":1}}"#).unwrap();
+    assert!(bool_get(&v, &["t", "b"]));
+    assert!(!bool_get(&v, &["x", "b"]));
+    assert!(!bool_get(&v, &["nope"]));
+}
+
+#[test]
 fn test_timestamp_to_epoch() {
     let v: Value = serde_json::from_str(
         "[1767000000, 1767000000000, \"1767000000\", \"2026-09-01T00:00:00Z\"]",

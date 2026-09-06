@@ -264,6 +264,26 @@ fn test_self_cost_capture() {
 }
 
 #[test]
+fn test_zero_tokens_with_cost_kept() {
+    let base = temp_dir();
+    let usage = r#"{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"cost":{"total":0.05}}"#;
+    write_file(
+        &base,
+        "zc.jsonl",
+        &[
+            header("s-z", TS),
+            message_entry(Some("a1"), TS, "assistant", &model_field("m"), usage),
+        ],
+    );
+    let entries = collect_from(std::slice::from_ref(&base)).unwrap();
+    // token 全零但真实扣费: 不丢弃
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].input_tokens, 0);
+    assert_eq!(entries[0].self_cost_usd, Some(0.05));
+    fs::remove_dir_all(&base).ok();
+}
+
+#[test]
 fn test_missing_roots_return_empty() {
     let base = temp_dir();
     fs::remove_dir_all(&base).unwrap();

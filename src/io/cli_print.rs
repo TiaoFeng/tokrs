@@ -71,9 +71,9 @@ fn totals_json(totals: &TokenTotals) -> serde_json::Value {
     })
 }
 
-/// 成本单元格: 全部无价显示 "-", 有价显示美元(小额 4 位小数), 部分无价加 "*"
+/// 成本单元格: 一条都没定价显示 "-", 有价显示美元(小额 4 位小数), 部分无价加 "*"
 fn cost_text(totals: &TokenTotals) -> String {
-    if totals.cost_usd == 0.0 && totals.unpriced > 0 {
+    if totals.unpriced == totals.requests {
         return "-".to_string();
     }
     let s = fmt_usd(totals.cost_usd);

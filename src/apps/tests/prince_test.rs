@@ -184,6 +184,54 @@ fn test_sync_models_appends_template_without_touching_existing() {
 }
 
 #[test]
+fn test_force_overrides_self_cost() {
+    let forced_table = table(
+        r#"{"version":1,"models":{"m":[{"force":true,"input":1.0,"output":0.0,"cache_read":0.0,"cache_write":0.0}]}}"#,
+    );
+    let empty_force = table(r#"{"version":1,"models":{"m":[{"force":true}]}}"#);
+    let plain = table(r#"{"version":1,"models":{"m":[{"input":1.0}]}}"#);
+    // force 且已填价: 无视自报 99, 按表计 1.0
+    let mut forced = entry("m", 0, 1_000_000, 0);
+    forced.self_cost_usd = Some(99.0);
+    resolve(std::slice::from_mut(&mut forced), &forced_table);
+    assert_eq!(forced.cost_usd, Some(1.0));
+    // force 但基础价未填: 回退自报, 不吞数据
+    let mut fallback = entry("m", 0, 1_000_000, 0);
+    fallback.self_cost_usd = Some(99.0);
+    resolve(std::slice::from_mut(&mut fallback), &empty_force);
+    assert_eq!(fallback.cost_usd, Some(99.0));
+    // 非 force: 自报照常优先
+    let mut normal = entry("m", 0, 1_000_000, 0);
+    normal.self_cost_usd = Some(99.0);
+    resolve(std::slice::from_mut(&mut normal), &plain);
+    assert_eq!(normal.cost_usd, Some(99.0));
+}
+
+#[test]
+fn test_sync_skips_unknown_and_empty_models() {
+    let dir = std::env::temp_dir().join(format!(
+        "tokrs-pricing-unknown-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let path = dir.join("pricing.json");
+    let mut table = PricingFile::default();
+    let entries = vec![
+        entry("unknown", 0, 1, 1),
+        entry("", 0, 1, 1),
+        entry("real-model", 0, 1, 1),
+    ];
+    assert_eq!(sync_models(&mut table, &path, &entries).unwrap(), 1);
+    assert!(table.models.contains_key("real-model"));
+    assert!(!table.models.contains_key("unknown"));
+    assert!(!table.models.keys().any(|k| k.is_empty()));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn test_load_missing_file_is_empty_but_corrupted_is_err() {
     let dir = std::env::temp_dir().join(format!(
         "tokrs-pricing-missing-{}-{}",

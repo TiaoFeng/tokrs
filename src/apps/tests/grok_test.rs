@@ -209,6 +209,30 @@ fn test_cost_usd_ticks_captured() {
 }
 
 #[test]
+fn test_zero_tokens_with_cost_kept_and_partial_ignored() {
+    let base = temp_dir();
+    // p1: token 全零但有可信自报(0.001 USD) -> 保留
+    let cost_only = r#"{"modelUsage":{"m":{"inputTokens":0,"outputTokens":0,"cachedReadTokens":0,"costUsdTicks":10000000}}}"#;
+    // p2: costIsPartial 标记自报仅为下界 -> 不采自报
+    let partial = r#"{"modelUsage":{"m":{"inputTokens":10,"outputTokens":1,"cachedReadTokens":0,"costUsdTicks":10000000,"costIsPartial":true}}}"#;
+    write_updates(
+        &base,
+        "sessions",
+        "s",
+        &[
+            turn_line(TS, Some("p1"), cost_only),
+            turn_line(TS, Some("p2"), partial),
+        ],
+    );
+    let mut entries = collect_from(&base).unwrap();
+    assert_eq!(entries.len(), 2);
+    entries.sort_by_key(|e| e.input_tokens);
+    assert_eq!(entries[0].self_cost_usd, Some(0.001));
+    assert_eq!(entries[1].self_cost_usd, None);
+    fs::remove_dir_all(&base).ok();
+}
+
+#[test]
 fn test_archived_converges_and_other_files_ignored() {
     let base = temp_dir();
     let lines = vec![turn_line(

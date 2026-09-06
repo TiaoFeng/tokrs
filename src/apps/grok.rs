@@ -79,18 +79,23 @@ fn parse_updates(file: &Path, candidates: &mut HashMap<String, UsageEntry>) {
             prompt_id.to_string()
         };
         event_index += 1;
+        // 事件级 costIsPartial 对该事件全部模型生效
+        let event_partial = load::bool_get(usage, &["costIsPartial"]);
         for (model, counters) in per_model(usage) {
             let input = load::u64_get(counters, &["inputTokens"]);
             let output = load::u64_get(counters, &["outputTokens"]);
             let cached = load::u64_get(counters, &["cachedReadTokens"]);
-            if input == 0 && output == 0 && cached == 0 {
+            // CLI 自报本轮成本, 1 tick = 1e-10 USD;
+            // costIsPartial=true 表示自报仅为下界, 不可信, 不采自报(交由定价表估价)
+            let ticks = load::u64_get(counters, &["costUsdTicks"]);
+            let partial = event_partial || load::bool_get(counters, &["costIsPartial"]);
+            let self_cost = (ticks > 0 && !partial).then(|| ticks as f64 / 1e10);
+            // token 全零但有可信自报成本时保留(不丢真实扣费)
+            if input == 0 && output == 0 && cached == 0 && self_cost.is_none() {
                 continue;
             }
             // grok 的 inputTokens 含 cachedRead, 归一为 fresh input
             let input = fresh_input(input, cached, 0);
-            // CLI 自报本轮精确成本, 1 tick = 1e-10 USD
-            let ticks = load::u64_get(counters, &["costUsdTicks"]);
-            let self_cost = (ticks > 0).then(|| ticks as f64 / 1e10);
             candidates.insert(
                 format!("{session_id}:{turn_key}:{model}"),
                 UsageEntry::new(

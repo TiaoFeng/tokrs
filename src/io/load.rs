@@ -108,6 +108,13 @@ pub fn cost_get(value: &Value, keys: &[&str]) -> Option<f64> {
     (cost > 0.0 && cost.is_finite()).then_some(cost)
 }
 
+/// 从 JSON 值按路径取 bool，缺失或类型不符返回 false
+pub fn bool_get(value: &Value, keys: &[&str]) -> bool {
+    get_nested(value, keys)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
 /// 时间戳自适应解析：数字（秒/毫秒）、数字字符串或 RFC3339，统一转 epoch 秒
 pub fn timestamp_to_epoch(value: &Value) -> Option<i64> {
     if let Some(n) = value.as_i64() {

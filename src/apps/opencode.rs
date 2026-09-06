@@ -77,7 +77,16 @@ fn parse_message(data: &str, session_id: &str, entries: &mut Vec<UsageEntry>) {
     let reasoning = load::u64_get(&value, &["tokens", "reasoning"]);
     let cache_read = load::u64_get(&value, &["tokens", "cache", "read"]);
     let cache_write = load::u64_get(&value, &["tokens", "cache", "write"]);
-    if input == 0 && output == 0 && reasoning == 0 && cache_read == 0 && cache_write == 0 {
+    // opencode 自报聚合成本(USD), >0 时无条件优先于定价表
+    let self_cost = load::cost_get(&value, &["cost"]);
+    // token 全零但有真实扣费(如失败仍计价的请求)时保留
+    if input == 0
+        && output == 0
+        && reasoning == 0
+        && cache_read == 0
+        && cache_write == 0
+        && self_cost.is_none()
+    {
         return;
     }
 
@@ -88,9 +97,6 @@ fn parse_message(data: &str, session_id: &str, entries: &mut Vec<UsageEntry>) {
         .pointer("/time/created")
         .and_then(load::timestamp_to_epoch)
         .unwrap_or_else(load::now_epoch);
-
-    // opencode 自报聚合成本(USD), >0 时无条件优先于定价表
-    let self_cost = load::cost_get(&value, &["cost"]);
 
     entries.push(UsageEntry::new(
         AppKind::OpenCode,

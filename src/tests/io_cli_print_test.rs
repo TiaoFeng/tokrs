@@ -29,4 +29,11 @@ fn test_cost_text() {
         ..Default::default()
     };
     assert_eq!(cost_text(&small), "$0.0042");
+    // 已定价部分合计恰为 0 且仍有 unpriced: 显示 $0.00* 而非 "-"
+    let zero_priced = TokenTotals {
+        requests: 2,
+        unpriced: 1,
+        ..Default::default()
+    };
+    assert_eq!(cost_text(&zero_priced), "$0.00*");
 }

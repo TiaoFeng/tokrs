@@ -1,8 +1,8 @@
 //! prince定价模块
 //!
-//! 成本解析优先级: 上游自报成本 > ~/.config/tokrs/pricing.json 估价 > 无价(unpriced)
+//! 成本解析优先级: force 覆盖(用户显式标记且已填价) > 自报成本 > pricing.json 估价 > unpriced
 //! pricing.json 支持: 同模型时间版本价(since, 本地日期生效), 长上下文/峰时字段级覆盖块
-//! 统计时自动为表中缺失的模型追加全 null 模板(绝不修改已有条目);
+//! 统计时自动为表中缺失的模型追加全 null 模板(绝不修改已有条目, 跳过 unknown 兜底名);
 //! 文件损坏直接报 Corrupted 退出且不回写, 由用户自行修复
 //!
 use chrono::NaiveDate;
@@ -75,6 +75,9 @@ pub struct PricingVersion {
     /// 生效日期(本地时区, YYYY-MM-DD); 缺省表示始终生效
     #[serde(default)]
     pub since: Option<NaiveDate>,
+    /// 强制覆盖: 为 true 且本版本已填基础价时, 忽略上游自报成本, 一律按本表计价
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub force: bool,
     #[serde(flatten)]
     pub fields: PricingFields,
     #[serde(default)]
@@ -142,7 +145,11 @@ pub fn sync_models(
     let models: BTreeSet<&str> = entries.iter().map(|e| e.model.as_str()).collect();
     let mut added = 0usize;
     for model in models {
-        if !model.is_empty() && !table.models.contains_key(model) {
+        // "unknown" 是各家解析器的兜底名, 进表只会污染定价文件
+        if model.is_empty() || model == "unknown" {
+            continue;
+        }
+        if !table.models.contains_key(model) {
             table
                 .models
                 .insert(model.to_string(), vec![PricingVersion::default()]);
@@ -169,21 +176,34 @@ pub fn sync_models(
     Ok(added)
 }
 
-/// 为每条 entry 解析最终成本: 自报无条件优先, 否则查表估价
+/// 为每条 entry 解析最终成本
+///
+/// 优先级: force 覆盖(版本标记且已填基础价) > 上游自报 > 表估价 > unpriced
 pub fn resolve(entries: &mut [UsageEntry], table: &PricingFile) {
     for entry in entries {
-        entry.cost_usd = entry.self_cost_usd.or_else(|| estimate(entry, table));
+        let version = match_version(table, entry);
+        let estimated = version.and_then(|v| estimate(entry, v));
+        let forced = version.is_some_and(|v| v.force) && estimated.is_some();
+        entry.cost_usd = if forced {
+            estimated
+        } else {
+            entry.self_cost_usd.or(estimated)
+        };
     }
 }
 
-/// 按定价表估算单条 entry 成本(USD); 无匹配版本或基础价全空返回 None
-fn estimate(entry: &UsageEntry, table: &PricingFile) -> Option<f64> {
+/// 定位 entry 当前生效的价格版本: 模型匹配 + 本地日期选择最新 since 版本
+fn match_version<'a>(table: &'a PricingFile, entry: &UsageEntry) -> Option<&'a PricingVersion> {
     let versions = find_versions(table, &entry.model)?;
     let date = local_date(entry.created_at);
-    let version = versions
+    versions
         .iter()
         .filter(|v| v.since.is_none_or(|since| date >= since))
-        .max_by_key(|v| v.since.unwrap_or(NaiveDate::MIN))?;
+        .max_by_key(|v| v.since.unwrap_or(NaiveDate::MIN))
+}
+
+/// 按定价版本估算单条 entry 成本(USD); 基础价全空(未填)返回 None
+fn estimate(entry: &UsageEntry, version: &PricingVersion) -> Option<f64> {
     let mut fields = version.fields.clone();
     // 基础价全 null 视为"用户未填", 不计成本
     if fields.is_empty() {

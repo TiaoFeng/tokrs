@@ -104,7 +104,10 @@ fn parse_entry(
     let output = load::u64_get(usage, &["output"]);
     let cache_read = load::u64_get(usage, &["cacheRead"]);
     let cache_write = load::u64_get(usage, &["cacheWrite"]);
-    if input == 0 && output == 0 && cache_read == 0 && cache_write == 0 {
+    // pi 自报本轮聚合成本(USD), >0 时无条件优先于定价表
+    let self_cost = load::cost_get(usage, &["cost", "total"]);
+    // token 全零但有真实扣费(如失败仍计价的请求)时保留
+    if input == 0 && output == 0 && cache_read == 0 && cache_write == 0 && self_cost.is_none() {
         return None;
     }
     let model = if let Some(message) = message.filter(|_| kind == "assistant") {
@@ -129,8 +132,6 @@ fn parse_entry(
         Some(id) => format!("id:{kind}:{id}"),
         None => format!("hash:{kind}:{}", content_hash(entry, usage)),
     };
-    // pi 自报本轮聚合成本(USD), >0 时无条件优先于定价表
-    let self_cost = load::cost_get(usage, &["cost", "total"]);
     Some((
         key,
         UsageEntry::new(

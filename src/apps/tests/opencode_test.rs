@@ -78,6 +78,30 @@ fn test_parse_assistant_messages() {
 }
 
 #[test]
+fn test_zero_tokens_with_cost_imported() {
+    let conn = temp_db();
+    conn.execute(
+        "INSERT INTO session (id, time_updated) VALUES ('s2', 1)",
+        [],
+    )
+    .unwrap();
+    insert_message(
+        &conn,
+        "m1",
+        "s2",
+        r#"{"role":"assistant","modelID":"free","cost":0.9,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"time":{"created":1788256800000,"completed":1788256801000}}"#,
+    );
+    let db_path = std::path::Path::new(conn.path().unwrap()).to_path_buf();
+    drop(conn);
+    let entries = collect_from(&db_path).unwrap();
+    std::fs::remove_file(&db_path).ok();
+    // token 全零但有真实扣费: 保留以记录成本
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].total_tokens(), 0);
+    assert_eq!(entries[0].self_cost_usd, Some(0.9));
+}
+
+#[test]
 fn test_missing_db_returns_empty() {
     let path = std::env::temp_dir().join("tokrs-opencode-nonexistent.db");
     assert!(collect_from(&path).unwrap().is_empty());
