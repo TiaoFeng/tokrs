@@ -1,6 +1,6 @@
 //! Cli格式化输出
 //!
-use comfy_table::presets::UTF8_FULL;
+use comfy_table::presets::ASCII_HORIZONTAL_ONLY;
 use comfy_table::{Attribute, Cell, Table};
 use serde_json::json;
 
@@ -23,7 +23,7 @@ pub fn print_report(rows: &[(String, TokenTotals)], total: &TokenTotals, today: 
         return;
     }
     let mut table = Table::new();
-    table.load_style(UTF8_FULL);
+    table.load_style(ASCII_HORIZONTAL_ONLY);
     table.set_header(HEADERS);
     table.add_row(bold_row("Today", today));
     for (key, totals) in rows {
