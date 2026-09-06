@@ -1,11 +1,15 @@
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
-
+//! 从用户文件夹中读取每个agent的数据文件
+//!
 use serde_json::Value;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use crate::error::{AppError, io_err};
 
+/// 返回用户home地址
 pub fn home_dir() -> Result<PathBuf, AppError> {
     std::env::home_dir().ok_or_else(|| AppError::Io {
         operation: "resolve home directory",
@@ -114,77 +118,5 @@ fn get_nested<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a Value> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-
-    fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "tokrs-load-{name}-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    #[test]
-    fn test_discover_files_respects_extension_and_depth() {
-        let base = temp_dir("discover");
-        fs::create_dir_all(base.join("a/b")).unwrap();
-        fs::write(base.join("root.jsonl"), "{}").unwrap();
-        fs::write(base.join("root.txt"), "{}").unwrap();
-        fs::write(base.join("a/mid.jsonl"), "{}").unwrap();
-        fs::write(base.join("a/b/deep.jsonl"), "{}").unwrap();
-
-        let found = discover_files(&base, "jsonl", 1);
-        let names: Vec<String> = found
-            .iter()
-            .map(|p| p.strip_prefix(&base).unwrap().to_string_lossy().to_string())
-            .collect();
-        assert_eq!(names, vec!["a/mid.jsonl", "root.jsonl"]);
-        fs::remove_dir_all(&base).ok();
-    }
-
-    #[test]
-    fn test_discover_files_missing_base_is_empty() {
-        let base = temp_dir("missing");
-        fs::remove_dir_all(&base).ok();
-        assert!(discover_files(&base, "jsonl", 3).is_empty());
-    }
-
-    #[test]
-    fn test_read_jsonl_skips_malformed_lines() {
-        let path = temp_dir("jsonl").join("f.jsonl");
-        fs::write(&path, "{\"a\":1}\nnot-json\n{\"a\":2}\n\n{\"a\":3}").unwrap();
-        let rows = read_jsonl(&path).unwrap();
-        assert_eq!(rows.len(), 3);
-        assert_eq!(rows[2]["a"], 3);
-    }
-
-    #[test]
-    fn test_u64_and_str_get() {
-        let v: Value = serde_json::from_str(r#"{"a":{"b":42},"s":{"t":"x"},"f":1.7}"#).unwrap();
-        assert_eq!(u64_get(&v, &["a", "b"]), 42);
-        assert_eq!(u64_get(&v, &["f"]), 1);
-        assert_eq!(u64_get(&v, &["nope"]), 0);
-        assert_eq!(str_get(&v, &["s", "t"]), Some("x"));
-        assert_eq!(str_get(&v, &["a", "t"]), None);
-    }
-
-    #[test]
-    fn test_timestamp_to_epoch() {
-        let v: Value = serde_json::from_str(
-            "[1767000000, 1767000000000, \"1767000000\", \"2026-09-01T00:00:00Z\"]",
-        )
-        .unwrap();
-        let arr = v.as_array().unwrap();
-        assert_eq!(timestamp_to_epoch(&arr[0]), Some(1_767_000_000));
-        assert_eq!(timestamp_to_epoch(&arr[1]), Some(1_767_000_000));
-        assert_eq!(timestamp_to_epoch(&arr[2]), Some(1_767_000_000));
-        assert_eq!(timestamp_to_epoch(&arr[3]), Some(1_788_220_800));
-    }
-}
+#[path = "../tests/io_load_test.rs"]
+mod tests;

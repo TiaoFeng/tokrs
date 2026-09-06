@@ -1,3 +1,7 @@
+//! 自定义AppError枚举
+//!
+//! 为AppError实现Display和Error trait
+//!
 use std::{error::Error, fmt, path::Path};
 
 #[derive(Debug)]

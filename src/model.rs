@@ -1,3 +1,9 @@
+//! 项目通用结构体与枚举
+//!
+//! 定义了AppKind(app类型)枚举,列举支持的app
+//! 定义了UsageEntry结构体保存用户数据
+//! 定义了TokenTotals结构体用于从用户请求数据统计Token的数量
+//!
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

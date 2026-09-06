@@ -1,14 +1,25 @@
-use std::collections::BTreeSet;
-
+//! 命令解析与运行入口
+//!
+//! 可以指定：
+//! - app种类
+//! - 按照day, app, model分组
+//! - 按照起始日期统计
+//! - 按照结束日期统计
+//! - 输出json文件
+//!
 use chrono::NaiveDate;
 use clap::{Parser, ValueEnum};
+use std::collections::BTreeSet;
 
-use crate::apps;
-use crate::error::AppError;
-use crate::io::cli_print;
-use crate::model::{AppKind, TokenTotals};
-use crate::tokens;
+use crate::{
+    apps,
+    error::AppError,
+    io::cli_print,
+    model::{AppKind, TokenTotals},
+    tokens,
+};
 
+/// 分类方法枚举
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum GroupBy {
     App,
@@ -16,6 +27,9 @@ enum GroupBy {
     Day,
 }
 
+/// 指定app参数枚举
+///
+/// 为输入指定的每个app的名称参数，实现解析对应的AppKind结构体方法
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum AppArg {
     Claude,
@@ -34,25 +48,27 @@ impl AppArg {
     }
 }
 
+/// Cli命令结构体
 #[derive(Parser)]
-#[command(name = "tokrs", about = "本地 Token 用量统计 CLI")]
+#[command(name = "tokrs", about = "Local Token Usage Statistics CLI")]
 pub struct Cli {
     #[arg(
         long,
         value_delimiter = ',',
-        help = "统计的应用 (claude,codex,opencode)，默认全部"
+        help = "Applications of Statistics (Claude, Codex, OpenCode)—all by default"
     )]
     app: Vec<AppArg>,
-    #[arg(long, value_enum, default_value_t = GroupBy::App, help = "分组维度")]
+    #[arg(long, value_enum, default_value_t = GroupBy::App, help = "Grouping")]
     by: GroupBy,
-    #[arg(long, help = "起始日期 YYYY-MM-DD（含）")]
+    #[arg(long, short, help = "Start Date YYYY-MM-DD (inclusive)")]
     since: Option<NaiveDate>,
-    #[arg(long, help = "结束日期 YYYY-MM-DD（含）")]
+    #[arg(long, short, help = "End Date YYYY-MM-DD (inclusive)")]
     until: Option<NaiveDate>,
-    #[arg(long, help = "以 JSON 格式输出")]
+    #[arg(long, help = "Output in JSON format")]
     json: bool,
 }
 
+/// cli运行函数
 pub fn run(cli: Cli) -> Result<(), AppError> {
     let app_kinds: Vec<AppKind> = if cli.app.is_empty() {
         AppKind::ALL.to_vec()

@@ -1,3 +1,5 @@
+//! Cli格式化输出
+//!
 use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Attribute, Cell, Table};
 use serde_json::json;
@@ -16,7 +18,7 @@ const HEADERS: [&str; 7] = [
 
 pub fn print_report(rows: &[(String, TokenTotals)], total: &TokenTotals, today: &TokenTotals) {
     if rows.is_empty() {
-        println!("No usage data found.");
+        println!(">_ No usage data found.");
         return;
     }
     let mut table = Table::new();
@@ -27,7 +29,7 @@ pub fn print_report(rows: &[(String, TokenTotals)], total: &TokenTotals, today: 
         table.add_row(row_cells(key, totals));
     }
     table.add_row(bold_row("Total", total));
-    println!("{table}");
+    println!("{}", table);
 }
 
 fn bold_row(key: &str, totals: &TokenTotals) -> Vec<Cell> {
