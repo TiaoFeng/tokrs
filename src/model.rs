@@ -69,6 +69,9 @@ pub struct UsageEntry {
     #[allow(dead_code)]
     pub session_id: Option<String>,
     pub created_at: i64,
+    /// fresh input(与缓存无关的增量输入)
+    ///
+    /// codex/gemini/grok 上游 input 含缓存, 已在解析层扣除归一, 全 app 语义统一
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cache_read_tokens: u64,

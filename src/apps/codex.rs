@@ -4,6 +4,7 @@ use serde_json::Value;
 use std::{collections::HashSet, path::Path};
 
 use crate::{
+    apps::fresh_input,
     error::AppError,
     io::load,
     model::{AppKind, UsageEntry},
@@ -83,6 +84,7 @@ impl Counters {
         })
     }
 
+    /// [input(含缓存), cached, cache_write, output]; fresh 归一在入账处统一处理
     fn billable(&self) -> [u64; 4] {
         [self.input, self.cached, self.cache_write, self.output]
     }
@@ -180,6 +182,8 @@ fn parse_token_count(
     if d_input == 0 && d_cached == 0 && d_write == 0 && d_output == 0 {
         return;
     }
+    // codex 的 input_tokens 含 cache read 与 cache write, 归一为 fresh input
+    let d_input = fresh_input(d_input, d_cached, d_write);
 
     let model = load::str_get(info, &["model"])
         .or_else(|| load::str_get(info, &["model_name"]))

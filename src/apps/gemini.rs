@@ -2,13 +2,15 @@
 //!
 //! 数据源: ~/.gemini/tmp/<project>/chats/session-*.json
 //! 每个文件是单个 JSON 对象(非 JSONL), 含 messages 数组
-//! 只统计 type=="gemini" 的消息; thoughts 并入 output; 按消息 id last-wins 去重
+//! 只统计 type=="gemini" 的消息; thoughts 并入 output; input 含 cached 已扣除归一
+//! 按消息 id last-wins 去重
 //! 参考: cc-switch session_usage_gemini.rs
 //!
 use serde_json::Value;
 use std::{collections::HashMap, path::Path};
 
 use crate::{
+    apps::fresh_input,
     error::AppError,
     io::load,
     model::{AppKind, UsageEntry},
@@ -58,6 +60,8 @@ fn parse_session(value: &Value, candidates: &mut HashMap<String, UsageEntry>) {
         if input == 0 && output == 0 && cached == 0 && thoughts == 0 {
             continue;
         }
+        // gemini 的 input 含 cached, 归一为 fresh input
+        let input = fresh_input(input, cached, 0);
         let msg_id = load::str_get(msg, &["id"]).unwrap_or("unknown");
         let dedup_key = format!("{}:{msg_id}", session_id.as_deref().unwrap_or("unknown"));
         let model = load::str_get(msg, &["model"])

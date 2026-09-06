@@ -2,13 +2,15 @@
 //!
 //! 数据源: ~/.grok/{sessions,archived_sessions}/<enc-cwd>/<session-id>/updates.jsonl
 //! 只统计 turn_completed 事件; usage 是逐轮独立总量, 按面值入账(禁差分, 差分致巨量漏记)
-//! reasoningTokens 已含于 outputTokens 不另计; costUsdTicks 待定价模块处理
+//! reasoningTokens 已含于 outputTokens 不另计; inputTokens 含 cachedRead 已扣除归一
+//! costUsdTicks 待定价模块处理
 //! 参考: cc-switch session_usage_grokbuild.rs
 //!
 use serde_json::Value;
 use std::{collections::HashMap, path::Path};
 
 use crate::{
+    apps::fresh_input,
     error::AppError,
     io::load,
     model::{AppKind, UsageEntry},
@@ -84,6 +86,8 @@ fn parse_updates(file: &Path, candidates: &mut HashMap<String, UsageEntry>) {
             if input == 0 && output == 0 && cached == 0 {
                 continue;
             }
+            // grok 的 inputTokens 含 cachedRead, 归一为 fresh input
+            let input = fresh_input(input, cached, 0);
             candidates.insert(
                 format!("{session_id}:{turn_key}:{model}"),
                 UsageEntry {

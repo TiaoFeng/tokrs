@@ -78,7 +78,8 @@ fn test_face_value_and_snapshot_filtering() {
     assert_eq!(entries.len(), 2);
     for e in &entries {
         assert_eq!(e.model, "grok-4.5-build");
-        assert_eq!(e.input_tokens, 100);
+        // inputTokens 含 cachedRead: fresh = 100-5 = 95
+        assert_eq!(e.input_tokens, 95);
         assert_eq!(e.output_tokens, 10);
         assert_eq!(e.cache_read_tokens, 5);
         assert_eq!(e.cache_creation_tokens, 0);
@@ -130,7 +131,7 @@ fn test_multi_model_and_top_level_fallback() {
     assert_eq!(entries[0].model, "model-a");
     assert_eq!(entries[1].model, "model-b");
     assert_eq!(entries[2].model, "unknown");
-    assert_eq!(entries[2].input_tokens, 50);
+    assert_eq!(entries[2].input_tokens, 47);
     assert_eq!(entries[2].cache_read_tokens, 3);
     fs::remove_dir_all(&base).ok();
 }
@@ -170,6 +171,27 @@ fn test_zero_and_timestampless_skipped() {
         ],
     );
     assert!(collect_from(&base).unwrap().is_empty());
+    fs::remove_dir_all(&base).ok();
+}
+
+#[test]
+fn test_pure_cache_hit_kept_with_zero_fresh_input() {
+    let base = temp_dir();
+    write_updates(
+        &base,
+        "sessions",
+        "s",
+        &[turn_line(
+            TS,
+            Some("p1"),
+            &model_usage(&[("m", counters(40, 0, 40))]),
+        )],
+    );
+    let entries = collect_from(&base).unwrap();
+    // input 全部来自缓存: fresh 归 0, 但缓存命中仍是真实用量, 必须保留
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].input_tokens, 0);
+    assert_eq!(entries[0].cache_read_tokens, 40);
     fs::remove_dir_all(&base).ok();
 }
 

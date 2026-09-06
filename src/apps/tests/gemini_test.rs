@@ -52,14 +52,16 @@ fn test_parse_tokens_and_merge_thoughts() {
             gemini_msg("m1", "gemini-2.5-pro", 100, 20, 0, 30),
             gemini_msg("m2", "gemini-2.5-pro", 0, 0, 500, 0),
             gemini_msg("m3", "gemini-2.5-pro", 0, 0, 0, 0),
+            gemini_msg("m4", "gemini-2.5-pro", 200, 20, 50, 0),
         ],
     );
     write_session(&base, "proj-a", "session-x.json", &doc);
     let mut entries = collect_from(&base).unwrap();
     entries.sort_by_key(|e| e.input_tokens);
     // user 消息与全零 token 消息被过滤, 纯缓存命中保留
-    assert_eq!(entries.len(), 2);
+    assert_eq!(entries.len(), 3);
     assert_eq!(entries[0].cache_read_tokens, 500);
+    assert_eq!(entries[0].input_tokens, 0);
     // thoughts 并入 output, tool/total 字段忽略
     assert_eq!(entries[1].output_tokens, 50);
     assert_eq!(entries[1].cache_creation_tokens, 0);
@@ -67,6 +69,10 @@ fn test_parse_tokens_and_merge_thoughts() {
     assert_eq!(entries[1].session_id.as_deref(), Some("sess-1"));
     assert_eq!(entries[1].model, "gemini-2.5-pro");
     assert_eq!(entries[1].created_at, 1_788_256_800);
+    // input 含 cached 已扣除: 200-50=150
+    assert_eq!(entries[2].input_tokens, 150);
+    assert_eq!(entries[2].cache_read_tokens, 50);
+    assert_eq!(entries[2].total_tokens(), 220);
     fs::remove_dir_all(&base).ok();
 }
 

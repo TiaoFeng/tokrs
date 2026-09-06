@@ -100,13 +100,14 @@ fn test_last_token_usage_wins_and_duplicates_skipped() {
     );
     let entries = collect_at(&base);
     assert_eq!(entries.len(), 2);
+    // input 已归一为 fresh: 100-50=50, 200-100=100
     assert_eq!(
         (
             entries[0].input_tokens,
             entries[0].cache_read_tokens,
             entries[0].output_tokens
         ),
-        (100, 50, 10)
+        (50, 50, 10)
     );
     assert_eq!(
         (
@@ -114,7 +115,7 @@ fn test_last_token_usage_wins_and_duplicates_skipped() {
             entries[1].cache_read_tokens,
             entries[1].output_tokens
         ),
-        (200, 100, 20)
+        (100, 100, 20)
     );
     assert_eq!(entries[0].model, "gpt-5-codex");
     assert_eq!(entries[0].session_id.as_deref(), Some(THREAD_ID));
@@ -134,13 +135,14 @@ fn test_total_high_water_delta() {
     );
     let entries = collect_at(&base);
     assert_eq!(entries.len(), 2);
+    // d=[50,10,0,10] -> fresh input = 50-10 = 40
     assert_eq!(
         (
             entries[1].input_tokens,
             entries[1].cache_read_tokens,
             entries[1].output_tokens
         ),
-        (50, 10, 10)
+        (40, 10, 10)
     );
 }
 
@@ -160,6 +162,8 @@ fn test_cached_clamped_to_input() {
     let entries = collect_at(&base);
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].cache_read_tokens, 10);
+    // cached 被 clamp 到 input(10) 后, fresh input 归零但缓存命中仍保留
+    assert_eq!(entries[0].input_tokens, 0);
 }
 
 #[test]
@@ -223,8 +227,9 @@ fn test_replayed_events_deduped_across_files() {
     );
     let entries = collect_at(&base);
     assert_eq!(entries.len(), 2);
-    assert_eq!(entries[0].input_tokens, 100);
-    assert_eq!(entries[1].input_tokens, 50);
+    // 均为 fresh: 100-50=50, last 50-10=40
+    assert_eq!(entries[0].input_tokens, 50);
+    assert_eq!(entries[1].input_tokens, 40);
 }
 
 #[test]
@@ -252,7 +257,8 @@ fn test_archived_sessions_collected() {
     );
     let entries = collect_at(&base);
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].input_tokens, 10);
+    // fresh: 10-2=8
+    assert_eq!(entries[0].input_tokens, 8);
 }
 
 #[test]
@@ -270,7 +276,9 @@ fn test_cache_write_parsed_and_delta_tracked() {
     let entries = collect_at(&base);
     assert_eq!(entries.len(), 3);
     assert_eq!(entries[0].cache_creation_tokens, 5);
-    assert_eq!(entries[1].input_tokens, 50);
+    // fresh: 100-10-5=85, d=[50,0,3,10]->47, last [10,0,4,5]->6
+    assert_eq!(entries[0].input_tokens, 85);
+    assert_eq!(entries[1].input_tokens, 47);
     assert_eq!(entries[1].cache_creation_tokens, 3);
     assert_eq!(entries[2].cache_creation_tokens, 4);
     assert_eq!(entries[2].cache_read_tokens, 0);
