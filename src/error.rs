@@ -13,7 +13,6 @@ pub enum AppError {
         path: String,
         source: std::io::Error,
     },
-    #[allow(dead_code)]
     Corrupted {
         path: String,
         source: serde_json::Error,
@@ -28,6 +27,14 @@ pub enum AppError {
 pub fn io_err(operation: &'static str, path: &Path, err: std::io::Error) -> AppError {
     AppError::Io {
         operation,
+        path: path.to_string_lossy().to_string(),
+        source: err,
+    }
+}
+
+/// 用于使用端快速的生成 `AppError::Corrupted` 这种错误类型
+pub fn json_err(path: &Path, err: serde_json::Error) -> AppError {
+    AppError::Corrupted {
         path: path.to_string_lossy().to_string(),
         source: err,
     }

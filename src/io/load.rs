@@ -7,7 +7,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::error::{AppError, io_err};
+use crate::error::{AppError, io_err, json_err};
 
 /// 返回用户home地址
 pub fn home_dir() -> Result<PathBuf, AppError> {
@@ -78,6 +78,12 @@ pub fn read_jsonl(path: &Path) -> Result<Vec<Value>, AppError> {
         }
     }
     Ok(out)
+}
+
+/// 读取单个 JSON 对象文件（非 JSONL，如 gemini 的 session 文件）
+pub fn read_json(path: &Path) -> Result<Value, AppError> {
+    let content = fs::read(path).map_err(|e| io_err("read", path, e))?;
+    serde_json::from_slice(&content).map_err(|e| json_err(path, e))
 }
 
 /// 从 JSON 值按路径取 u64，缺失或类型不符返回 0

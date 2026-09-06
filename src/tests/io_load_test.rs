@@ -49,6 +49,17 @@ fn test_read_jsonl_skips_malformed_lines() {
 }
 
 #[test]
+fn test_read_json_ok_and_corrupted() {
+    let dir = temp_dir("readjson");
+    let ok = dir.join("a.json");
+    fs::write(&ok, "{\"x\":1}").unwrap();
+    assert_eq!(read_json(&ok).unwrap()["x"], 1);
+    let bad = dir.join("b.json");
+    fs::write(&bad, "{oops").unwrap();
+    assert!(matches!(read_json(&bad), Err(AppError::Corrupted { .. })));
+}
+
+#[test]
 fn test_u64_and_str_get() {
     let v: Value = serde_json::from_str(r#"{"a":{"b":42},"s":{"t":"x"},"f":1.7}"#).unwrap();
     assert_eq!(u64_get(&v, &["a", "b"]), 42);

@@ -36,6 +36,7 @@ enum AppArg {
     Codex,
     #[value(name = "opencode")]
     OpenCode,
+    Gemini,
 }
 
 impl AppArg {
@@ -44,6 +45,7 @@ impl AppArg {
             AppArg::Claude => AppKind::Claude,
             AppArg::Codex => AppKind::Codex,
             AppArg::OpenCode => AppKind::OpenCode,
+            AppArg::Gemini => AppKind::Gemini,
         }
     }
 }
@@ -55,7 +57,7 @@ pub struct Cli {
     #[arg(
         long,
         value_delimiter = ',',
-        help = "Applications of Statistics (Claude, Codex, OpenCode)—all by default"
+        help = "Applications of Statistics (Claude, Codex, OpenCode, Gemini)—all by default"
     )]
     app: Vec<AppArg>,
     #[arg(long, value_enum, default_value_t = GroupBy::App, help = "Grouping")]
