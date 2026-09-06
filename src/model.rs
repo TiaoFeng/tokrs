@@ -13,15 +13,17 @@ pub enum AppKind {
     OpenCode,
     Gemini,
     Grok,
+    Pi,
 }
 
 impl AppKind {
-    pub const ALL: [AppKind; 5] = [
+    pub const ALL: [AppKind; 6] = [
         AppKind::Claude,
         AppKind::Codex,
         AppKind::OpenCode,
         AppKind::Gemini,
         AppKind::Grok,
+        AppKind::Pi,
     ];
 
     pub fn as_str(&self) -> &'static str {
@@ -31,6 +33,7 @@ impl AppKind {
             AppKind::OpenCode => "opencode",
             AppKind::Gemini => "gemini",
             AppKind::Grok => "grok",
+            AppKind::Pi => "pi",
         }
     }
 }
@@ -51,8 +54,9 @@ impl std::str::FromStr for AppKind {
             "opencode" => Ok(AppKind::OpenCode),
             "gemini" => Ok(AppKind::Gemini),
             "grok" => Ok(AppKind::Grok),
+            "pi" => Ok(AppKind::Pi),
             other => Err(format!(
-                "unknown app '{other}', expected one of: claude, codex, opencode, gemini, grok"
+                "unknown app '{other}', expected one of: claude, codex, opencode, gemini, grok, pi"
             )),
         }
     }

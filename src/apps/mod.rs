@@ -3,8 +3,8 @@ pub mod codex;
 pub mod gemini;
 pub mod grok;
 pub mod opencode;
+pub mod pi;
 
-mod pi;
 mod prince;
 
 use crate::error::AppError;
@@ -19,6 +19,7 @@ pub fn collect(apps: &[AppKind]) -> Result<Vec<UsageEntry>, AppError> {
             AppKind::OpenCode => entries.extend(opencode::collect()?),
             AppKind::Gemini => entries.extend(gemini::collect()?),
             AppKind::Grok => entries.extend(grok::collect()?),
+            AppKind::Pi => entries.extend(pi::collect()?),
         }
     }
     Ok(entries)
