@@ -1,9 +1,9 @@
 pub mod claude;
 pub mod codex;
 pub mod gemini;
+pub mod grok;
 pub mod opencode;
 
-mod grok;
 mod pi;
 mod prince;
 
@@ -18,6 +18,7 @@ pub fn collect(apps: &[AppKind]) -> Result<Vec<UsageEntry>, AppError> {
             AppKind::Codex => entries.extend(codex::collect()?),
             AppKind::OpenCode => entries.extend(opencode::collect()?),
             AppKind::Gemini => entries.extend(gemini::collect()?),
+            AppKind::Grok => entries.extend(grok::collect()?),
         }
     }
     Ok(entries)
