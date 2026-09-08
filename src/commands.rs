@@ -63,7 +63,7 @@ pub struct Cli {
     #[arg(
         long,
         value_delimiter = ',',
-        help = "Applications of Statistics (Claude, Codex, OpenCode, Gemini, Grok, Pi)—all by default"
+        help = "Applications of Statistics (Claude, Codex, OpenCode, Gemini, Grok, Pi, Kimi)—all by default"
     )]
     app: Vec<AppArg>,
     #[arg(long, value_enum, default_value_t = GroupBy::App, help = "Grouping")]

@@ -155,7 +155,8 @@ fn nonempty_str<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
 /// entry.id 缺失时的内容哈希去重
 ///
 /// serde_json 默认用 BTreeMap 存对象, 序列化与哈希顺序确定;
-/// 单次运行内去重即可, 无需跨进程稳定, 故用 std 哈希不加 sha2 依赖
+/// DefaultHasher::new() 固定 key(0,0), 跨进程结果同样稳定, 只是本工具
+/// 每次全量重扫, 单进程内去重即足够, 故用 std 哈希不加 sha2 依赖
 fn content_hash(entry: &Value, usage: &Value) -> u64 {
     let mut hasher = DefaultHasher::new();
     if let Some(ts) = entry.get("timestamp") {
