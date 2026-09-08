@@ -27,7 +27,7 @@
 | App | 数据位置 | 说明 |
 |---|---|---|
 | Claude | `~/.claude/projects/**/*.jsonl` | 按 `message.id` 去重 |
-| Codex | `~/.codex/{sessions/**,archived_sessions/*.jsonl}` | `token_count` 事件，签名去重 |
+| Codex | `~/.codex/{sessions/**,archived_sessions/*.jsonl}` | `token_count` 事件；文件内同源快照/紧邻重复判零，fork 回放按父链前缀过滤，archived 同名副本保留最长 |
 | OpenCode | `~/.local/share/opencode/opencode.db` | SQLite 只读访问 |
 | Gemini | `~/.gemini/tmp/*/chats/session-*.json` | 单 JSON 对象，损坏文件跳过 |
 | Grok | `~/.grok/{sessions,archived_sessions}/**/updates.jsonl` | 逐轮 `turn_completed` 面值 |

@@ -27,7 +27,7 @@ A native token usage statistics CLI written in Rust. It directly reads the log a
 | App | Data Location | Description |
 |---|---|---|
 | Claude | `~/.claude/projects/**/*.jsonl` | Dedupe by `message.id` |
-| Codex | `~/.codex/{sessions/**,archived_sessions/*.jsonl}` | `token_count` events; deduplicate by signature |
+| Codex | `~/.codex/{sessions/**,archived_sessions/*.jsonl}` | `token_count` events; in-file same-source/adjacent snapshot repeats zeroed, fork replays filtered via parent-chain prefix match, same-name archived copies deduplicated (longest wins) |
 | OpenCode | `~/.local/share/opencode/opencode.db` | Read-only access to SQLite |
 | Gemini | `~/.gemini/tmp/*/chats/session-*.json` | Single JSON object; skip corrupted files |
 | Grok | `~/.grok/{sessions,archived_sessions}/**/updates.jsonl` | Check `turn_completed` value per round |
