@@ -156,3 +156,22 @@ fn test_missing_base_returns_empty() {
     fs::remove_dir_all(&base).unwrap();
     assert!(collect_from(&base).unwrap().is_empty());
 }
+
+#[test]
+fn test_model_normalization() {
+    let base = temp_dir();
+    write_session(
+        &base,
+        "p",
+        "session-1.json",
+        &session_json(
+            "s",
+            &[gemini_msg("m1", "vertex-ai/Gemini-2.5-Pro", 1, 1, 0, 0)],
+        ),
+    );
+    let entries = collect_from(&base).unwrap();
+    assert_eq!(entries.len(), 1);
+    // 全 app 统一归一化: 前缀剥除 + 小写
+    assert_eq!(entries[0].model, "gemini-2.5-pro");
+    fs::remove_dir_all(&base).ok();
+}

@@ -3,6 +3,7 @@ use serde_json::Value;
 use std::{collections::HashSet, path::Path};
 
 use crate::{
+    apps::normalize_model,
     error::{AppError, sqlite_err},
     io::load,
     model::{AppKind, UsageEntry},
@@ -90,9 +91,8 @@ fn parse_message(data: &str, session_id: &str, entries: &mut Vec<UsageEntry>) {
         return;
     }
 
-    let model = load::str_get(&value, &["modelID"])
-        .unwrap_or("unknown")
-        .to_string();
+    let model =
+        load::str_get(&value, &["modelID"]).map_or_else(|| "unknown".to_string(), normalize_model);
     let created_at = value
         .pointer("/time/created")
         .and_then(load::timestamp_to_epoch)

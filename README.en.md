@@ -32,7 +32,7 @@ A native token usage statistics CLI written in Rust. It directly reads the log a
 | Gemini | `~/.gemini/tmp/*/chats/session-*.json` | Single JSON object; skip corrupted files |
 | Grok | `~/.grok/{sessions,archived_sessions}/**/updates.jsonl` | Check `turn_completed` value per round |
 | Pi | `~/.pi/agent/sessions/*.jsonl` (can be overridden with `$PI_CODING_AGENT_SESSION_DIR`) | Deduped by `entry.id` / content hash |
-| Kimi | `~/.kimi-code/sessions/**/agents/*/wire.jsonl` | `usage.record`: For each call, the model strips the provider prefix (same as Codex) and removes duplicates from the content signatures (fork copies are not counted twice) |
+| Kimi | `~/.kimi-code/sessions/**/agents/*/wire.jsonl` | `usage.record`: For each call, models are normalized uniformly (provider prefix stripped, lowercased; same for all apps), and duplicates are removed from the content signatures (fork copies are not counted twice) |
 
 
 ## Installation

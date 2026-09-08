@@ -13,6 +13,7 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use crate::{
+    apps::normalize_model,
     error::AppError,
     io::load,
     model::{AppKind, UsageEntry},
@@ -113,8 +114,7 @@ fn parse_entry(
     let model = if let Some(message) = message.filter(|_| kind == "assistant") {
         nonempty_str(message, &["responseModel"])
             .or_else(|| nonempty_str(message, &["model"]))
-            .unwrap_or("unknown")
-            .to_string()
+            .map_or_else(|| "unknown".to_string(), normalize_model)
     } else {
         "unknown".to_string()
     };

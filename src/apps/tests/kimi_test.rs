@@ -108,14 +108,20 @@ fn test_model_normalization() {
             usage_line("main", "", 20, 1, 1, 0, 0, Some("turn")),
             // 全空格 model -> unknown
             usage_line("main", "   ", 30, 1, 1, 0, 0, Some("turn")),
+            // 大写别名归一为小写
+            usage_line("main", "Moonshot-CN/Kimi-K3", 40, 1, 1, 0, 0, Some("turn")),
+            // 尾斜杠(段为空)兜底 unknown
+            usage_line("main", "moonshot-cn/", 50, 1, 1, 0, 0, Some("turn")),
         ],
     );
     let mut entries = collect_from(&base).unwrap();
     entries.sort_by_key(|e| e.created_at);
-    assert_eq!(entries.len(), 3);
+    assert_eq!(entries.len(), 5);
     assert_eq!(entries[0].model, "kimi-k3");
     assert_eq!(entries[1].model, "unknown");
     assert_eq!(entries[2].model, "unknown");
+    assert_eq!(entries[3].model, "kimi-k3");
+    assert_eq!(entries[4].model, "unknown");
     fs::remove_dir_all(&base).ok();
 }
 

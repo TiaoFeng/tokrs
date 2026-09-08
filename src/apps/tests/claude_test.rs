@@ -99,3 +99,18 @@ fn test_missing_base_returns_empty() {
     fs::remove_dir_all(&base).unwrap();
     assert!(collect_from(&base).unwrap().is_empty());
 }
+
+#[test]
+fn test_model_normalization() {
+    let base = temp_dir();
+    write_session(
+        &base,
+        "session.jsonl",
+        &[r#"{"type":"assistant","sessionId":"sess-1","timestamp":"2026-09-01T10:00:00Z","message":{"id":"m1","model":"openrouter/anthropic/Claude-Sonnet-4-5","usage":{"input_tokens":1,"output_tokens":1}}}"#.to_string()],
+    );
+    let entries = collect_from(&base).unwrap();
+    assert_eq!(entries.len(), 1);
+    // 全 app 统一归一化: 多级前缀剥除 + 小写
+    assert_eq!(entries[0].model, "claude-sonnet-4-5");
+    fs::remove_dir_all(&base).ok();
+}

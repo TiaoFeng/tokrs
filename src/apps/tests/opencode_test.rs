@@ -106,3 +106,26 @@ fn test_missing_db_returns_empty() {
     let path = std::env::temp_dir().join("tokrs-opencode-nonexistent.db");
     assert!(collect_from(&path).unwrap().is_empty());
 }
+
+#[test]
+fn test_model_normalization() {
+    let conn = temp_db();
+    conn.execute(
+        "INSERT INTO session (id, time_updated) VALUES ('s1', 1)",
+        [],
+    )
+    .unwrap();
+    insert_message(
+        &conn,
+        "m1",
+        "s1",
+        r#"{"role":"assistant","modelID":"openrouter/anthropic/Claude-Sonnet-4-5","tokens":{"input":1,"output":1},"time":{"created":1788256800000,"completed":1788256801000}}"#,
+    );
+    let db_path = std::path::Path::new(conn.path().unwrap()).to_path_buf();
+    drop(conn);
+    let entries = collect_from(&db_path).unwrap();
+    std::fs::remove_file(&db_path).ok();
+    assert_eq!(entries.len(), 1);
+    // 全 app 统一归一化: 多级前缀剥除 + 小写
+    assert_eq!(entries[0].model, "claude-sonnet-4-5");
+}

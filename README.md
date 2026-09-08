@@ -32,7 +32,7 @@
 | Gemini | `~/.gemini/tmp/*/chats/session-*.json` | 单 JSON 对象，损坏文件跳过 |
 | Grok | `~/.grok/{sessions,archived_sessions}/**/updates.jsonl` | 逐轮 `turn_completed` 面值 |
 | Pi | `~/.pi/agent/sessions/*.jsonl`（可用 `$PI_CODING_AGENT_SESSION_DIR` 覆盖） | 按 entry.id / 内容哈希去重 |
-| Kimi | `~/.kimi-code/sessions/**/agents/*/wire.jsonl` | `usage.record` 每调用面值，model 剥 provider 前缀归一（与 codex 同款），内容签名去重（fork 副本不双算） |
+| Kimi | `~/.kimi-code/sessions/**/agents/*/wire.jsonl` | `usage.record` 每调用面值，model 统一归一化（剥 provider 前缀/小写，全 app 同款），内容签名去重（fork 副本不双算） |
 
 ## 安装
 

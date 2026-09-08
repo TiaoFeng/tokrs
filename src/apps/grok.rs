@@ -10,7 +10,7 @@ use serde_json::Value;
 use std::{collections::HashMap, path::Path};
 
 use crate::{
-    apps::fresh_input,
+    apps::{fresh_input, normalize_model},
     error::AppError,
     io::load,
     model::{AppKind, UsageEntry},
@@ -96,11 +96,12 @@ fn parse_updates(file: &Path, candidates: &mut HashMap<String, UsageEntry>) {
             }
             // grok 的 inputTokens 含 cachedRead, 归一为 fresh input
             let input = fresh_input(input, cached, 0);
+            // 去重键保留原始 bucket 名(不同 bucket 是独立用量), 落表值统一归一化
             candidates.insert(
                 format!("{session_id}:{turn_key}:{model}"),
                 UsageEntry::new(
                     AppKind::Grok,
-                    model.to_string(),
+                    normalize_model(model),
                     Some(session_id.to_string()),
                     created_at,
                     input,

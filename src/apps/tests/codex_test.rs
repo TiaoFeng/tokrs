@@ -248,10 +248,11 @@ fn test_info_model_persists_and_turn_context_fallback() {
     );
     let entries = collect_at(&base);
     assert_eq!(entries.len(), 3);
-    assert_eq!(entries[0].model, "gpt-5.4");
-    assert_eq!(entries[1].model, "qwen3");
+    // 全 app 统一归一化(剥前缀/小写), 日期后缀保留
+    assert_eq!(entries[0].model, "gpt-5.4-2026-01-01");
+    assert_eq!(entries[1].model, "qwen3-20250515");
     // info.model 持久化(对齐 cc-switch): 后续无 model 事件沿用最近一次
-    assert_eq!(entries[2].model, "qwen3");
+    assert_eq!(entries[2].model, "qwen3-20250515");
 }
 
 #[test]
@@ -737,14 +738,6 @@ fn test_same_source_repeat_after_other_source_advance_deduped() {
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].input_tokens, 40);
     assert_eq!(entries[1].input_tokens, 40);
-}
-
-#[test]
-fn test_normalize_model() {
-    assert_eq!(normalize_model("Foo/GPT-5.4-2026-01-01"), "gpt-5.4");
-    assert_eq!(normalize_model("qwen3-20250515"), "qwen3");
-    assert_eq!(normalize_model("deepseek-v3.2"), "deepseek-v3.2");
-    assert_eq!(normalize_model(" GPT-5 "), "gpt-5");
 }
 
 #[test]

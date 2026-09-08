@@ -289,3 +289,27 @@ fn test_missing_roots_return_empty() {
     fs::remove_dir_all(&base).unwrap();
     assert!(collect_from(&[base]).unwrap().is_empty());
 }
+
+#[test]
+fn test_model_normalization() {
+    let base = temp_dir();
+    write_file(
+        &base,
+        "n1.jsonl",
+        &[
+            header("s-n", TS),
+            message_entry(
+                Some("a1"),
+                TS + 1,
+                "assistant",
+                &model_field("openrouter/anthropic/Claude-Sonnet-4-5"),
+                &usage_json(1, 1, 0, 0),
+            ),
+        ],
+    );
+    let entries = collect_from(std::slice::from_ref(&base)).unwrap();
+    assert_eq!(entries.len(), 1);
+    // 全 app 统一归一化: 多级前缀剥除 + 小写
+    assert_eq!(entries[0].model, "claude-sonnet-4-5");
+    fs::remove_dir_all(&base).ok();
+}

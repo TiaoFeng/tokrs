@@ -10,7 +10,7 @@ use serde_json::Value;
 use std::{collections::HashMap, path::Path};
 
 use crate::{
-    apps::fresh_input,
+    apps::{fresh_input, normalize_model},
     error::AppError,
     io::load,
     model::{AppKind, UsageEntry},
@@ -64,9 +64,8 @@ fn parse_session(value: &Value, candidates: &mut HashMap<String, UsageEntry>) {
         let input = fresh_input(input, cached, 0);
         let msg_id = load::str_get(msg, &["id"]).unwrap_or("unknown");
         let dedup_key = format!("{}:{msg_id}", session_id.as_deref().unwrap_or("unknown"));
-        let model = load::str_get(msg, &["model"])
-            .unwrap_or("unknown")
-            .to_string();
+        let model =
+            load::str_get(msg, &["model"]).map_or_else(|| "unknown".to_string(), normalize_model);
         let created_at = msg
             .get("timestamp")
             .and_then(load::timestamp_to_epoch)

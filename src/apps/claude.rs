@@ -7,6 +7,7 @@ use std::{
 };
 
 use crate::{
+    apps::normalize_model,
     error::AppError,
     io::load,
     model::{AppKind, UsageEntry},
@@ -62,9 +63,8 @@ fn parse_assistant_line(
     if input == 0 && output == 0 && cache_read == 0 && cache_creation == 0 {
         return;
     }
-    let model = load::str_get(message, &["model"])
-        .unwrap_or("unknown")
-        .to_string();
+    let model =
+        load::str_get(message, &["model"]).map_or_else(|| "unknown".to_string(), normalize_model);
     let session_id = load::str_get(value, &["sessionId"])
         .or(session_fallback)
         .map(str::to_string);

@@ -5,8 +5,8 @@
 //! (与 llm.request 一一对应, 每 step 恰好一条), 逐条相加即官方计费口径
 //! inputOther 为 fresh input(不含缓存, 实测恒小于 cacheRead), thinking token 已并入 output,
 //! 故不经 fresh_input 归一(与 claude 同款); kimi 无自报成本, 交由定价表估价
-//! model 为完整别名(moonshot-cn/kimi-k3), 经 strip_provider 归一为裸 model id 落表
-//! (与 codex 同款, 同模型跨渠道合并计价; 中转渠道无法区分, 与项目现状一致)
+//! model 为完整别名(moonshot-cn/kimi-k3), 经 apps::normalize_model 统一归一(剥前缀/小写)落表
+//! (全 app 统一, 同模型跨渠道合并计价; 中转渠道无法区分, 与项目现状一致)
 //! 去重键: 不含 session 的内容签名(agent:time:model:usage 四元),
 //! fork/恢复会逐字节复制 wire.jsonl(time/usage 保持)→签名一致天然去重, 防双算;
 //! 真实失败重试的 time 毫秒不同→各自入账, 与官方二次计费一致
@@ -18,7 +18,7 @@ use std::{
 };
 
 use crate::{
-    apps::strip_provider,
+    apps::normalize_model,
     error::AppError,
     io::load,
     model::{AppKind, UsageEntry},
@@ -79,13 +79,10 @@ fn parse_wire(file: &Path, candidates: &mut HashMap<String, UsageEntry>) {
         if input == 0 && output == 0 && cache_read == 0 && cache_creation == 0 {
             continue;
         }
-        // model 为完整别名(moonshot-cn/kimi-k3), 与 codex 同款剥前缀归一为裸 model id;
-        // 同模型跨渠道合并计价, 通道区分不支持(项目现状); 空/缺失回退 unknown
+        // model 为完整别名(moonshot-cn/kimi-k3), 全 app 统一经 normalize_model 归一
+        // (剥前缀/小写/空值兜底); 同模型跨渠道合并计价, 通道区分不支持(项目现状)
         let model = load::str_get(&record, &["model"])
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map_or("unknown", strip_provider)
-            .to_string();
+            .map_or_else(|| "unknown".to_string(), normalize_model);
         let created_at = record
             .get("time")
             .and_then(load::timestamp_to_epoch)

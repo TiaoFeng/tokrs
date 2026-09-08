@@ -261,3 +261,23 @@ fn test_missing_base_returns_empty() {
     fs::remove_dir_all(&base).unwrap();
     assert!(collect_from(&base).unwrap().is_empty());
 }
+
+#[test]
+fn test_model_normalization() {
+    let base = temp_dir();
+    write_updates(
+        &base,
+        "sessions",
+        "sess-n",
+        &[turn_line(
+            TS,
+            Some("p1"),
+            &model_usage(&[("x-ai/Grok-4", counters(10, 5, 0))]),
+        )],
+    );
+    let entries = collect_from(&base).unwrap();
+    assert_eq!(entries.len(), 1);
+    // 全 app 统一归一化: 前缀剥除 + 小写
+    assert_eq!(entries[0].model, "grok-4");
+    fs::remove_dir_all(&base).ok();
+}

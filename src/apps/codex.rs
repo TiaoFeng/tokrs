@@ -33,7 +33,7 @@ use std::{
 };
 
 use crate::{
-    apps::fresh_input,
+    apps::{fresh_input, normalize_model},
     error::AppError,
     io::load,
     model::{AppKind, UsageEntry},
@@ -597,33 +597,6 @@ fn is_uuid_like(s: &str) -> bool {
             8 | 13 | 18 | 23 => c == b'-',
             _ => c.is_ascii_hexdigit(),
         })
-}
-
-fn normalize_model(raw: &str) -> String {
-    let mut s = raw.trim().to_ascii_lowercase();
-    if let Some(pos) = s.rfind('/') {
-        s = s[pos + 1..].to_string();
-    }
-    strip_date_suffix(&s).to_string()
-}
-
-fn strip_date_suffix(s: &str) -> &str {
-    let bytes = s.as_bytes();
-    let all_digits = |b: &[u8]| b.iter().all(u8::is_ascii_digit);
-    if bytes.len() >= 11
-        && bytes[bytes.len() - 11] == b'-'
-        && bytes[bytes.len() - 6] == b'-'
-        && bytes[bytes.len() - 3] == b'-'
-        && all_digits(&bytes[bytes.len() - 10..bytes.len() - 6])
-        && all_digits(&bytes[bytes.len() - 5..bytes.len() - 3])
-        && all_digits(&bytes[bytes.len() - 2..])
-    {
-        return &s[..s.len() - 11];
-    }
-    if bytes.len() >= 9 && bytes[bytes.len() - 9] == b'-' && all_digits(&bytes[bytes.len() - 8..]) {
-        return &s[..s.len() - 9];
-    }
-    s
 }
 
 #[cfg(test)]
