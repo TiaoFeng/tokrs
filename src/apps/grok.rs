@@ -41,9 +41,6 @@ pub fn collect_from(base: &Path) -> Result<Vec<UsageEntry>, AppError> {
 }
 
 fn parse_updates(file: &Path, candidates: &mut HashMap<String, UsageEntry>) {
-    let Ok(records) = load::read_jsonl(file) else {
-        return;
-    };
     // 会话 ID = updates.jsonl 的父目录名(UUIDv7, 全局唯一)
     let session_id = file
         .parent()
@@ -52,25 +49,26 @@ fn parse_updates(file: &Path, candidates: &mut HashMap<String, UsageEntry>) {
         .unwrap_or("unknown");
     // 序号只对有效的用量事件递增(对齐 cc-switch 的 events 下标)
     let mut event_index = 0usize;
-    for record in records {
+    // 文件级读取错误吞掉(原行为); 逐行流式防 GB 级文件整读驻留
+    let _ = load::for_each_jsonl(file, &[], |record| {
         if load::str_get(&record, &["method"]) != Some("_x.ai/session/update") {
-            continue;
+            return true;
         }
         let Some(update) = record.get("params").and_then(|p| p.get("update")) else {
-            continue;
+            return true;
         };
         // 显式标为其它类型(如 usage_snapshot)即使带 usage 也跳过, 防中途快照双算;
         // 字段缺失则向后兼容放行
         let kind = load::str_get(update, &["sessionUpdate"]);
         if kind.is_some() && kind != Some("turn_completed") {
-            continue;
+            return true;
         }
         let Some(usage) = update.get("usage").filter(|u| u.is_object()) else {
-            continue;
+            return true;
         };
         // 没有时间戳的事件无法归入任何日期, 直接跳过
         let Some(created_at) = record.get("timestamp").and_then(load::timestamp_to_epoch) else {
-            continue;
+            return true;
         };
         let prompt_id = load::str_get(update, &["prompt_id"]).unwrap_or("");
         let turn_key = if prompt_id.is_empty() {
@@ -112,7 +110,8 @@ fn parse_updates(file: &Path, candidates: &mut HashMap<String, UsageEntry>) {
                 ),
             );
         }
-    }
+        true
+    });
 }
 
 /// 逐模型面值用量; 缺 modelUsage 时回退顶层 usage 且模型名未知

@@ -48,9 +48,6 @@ pub fn collect_from(base: &Path) -> Result<Vec<UsageEntry>, AppError> {
 }
 
 fn parse_wire(file: &Path, candidates: &mut HashMap<String, UsageEntry>) {
-    let Ok(records) = load::read_jsonl(file) else {
-        return;
-    };
     // 会话 ID = 路径中 "session_" 前缀的祖先目录名(仅备查, 不进 dedup 键)
     let session_id = file.ancestors().find_map(|p| {
         p.file_name()
@@ -58,18 +55,19 @@ fn parse_wire(file: &Path, candidates: &mut HashMap<String, UsageEntry>) {
             .filter(|n| n.starts_with("session_"))
             .map(str::to_string)
     });
-    for record in records {
+    // 文件级读取错误吞掉(原行为); 逐行流式防 GB 级文件整读驻留
+    let _ = load::for_each_jsonl(file, &[], |record| {
         if load::str_get(&record, &["type"]) != Some("usage.record") {
-            continue;
+            return true;
         }
         // 显式标为其它 scope(如未来版本的 session 级聚合快照)即使带 usage 也跳过, 防双算;
         // 字段缺失则向后兼容放行(对齐 grok 对 sessionUpdate 的处理)
         let scope = load::str_get(&record, &["usageScope"]);
         if scope.is_some() && scope != Some("turn") {
-            continue;
+            return true;
         }
         let Some(usage) = record.get("usage").filter(|u| u.is_object()) else {
-            continue;
+            return true;
         };
         // 四项 token 全零的记录跳过(claude 同款); 无任何成本来源可保留
         let input = load::u64_get(usage, &["inputOther"]);
@@ -77,7 +75,7 @@ fn parse_wire(file: &Path, candidates: &mut HashMap<String, UsageEntry>) {
         let cache_read = load::u64_get(usage, &["inputCacheRead"]);
         let cache_creation = load::u64_get(usage, &["inputCacheCreation"]);
         if input == 0 && output == 0 && cache_read == 0 && cache_creation == 0 {
-            continue;
+            return true;
         }
         // model 为完整别名(moonshot-cn/kimi-k3), 全 app 统一经 normalize_model 归一
         // (剥前缀/小写/空值兜底); 同模型跨渠道合并计价, 通道区分不支持(项目现状)
@@ -113,7 +111,8 @@ fn parse_wire(file: &Path, candidates: &mut HashMap<String, UsageEntry>) {
             // 签名一致即同一事件的 fork 副本, 面值定值记录内容相同, 保留先到者
             Entry::Occupied(_) => {}
         }
-    }
+        true
+    });
 }
 
 #[cfg(test)]

@@ -1,8 +1,12 @@
 //! 从用户文件夹中读取每个agent的数据文件
 //!
+//! 日志文件可达 GB 级: 所有读取均为流式(逐行/逐块), 峰值内存 O(单行),
+//! 修改原本的读取逻辑(整读 + DOM 驻留会耗尽内存)
+//!
 use serde_json::Value;
 use std::{
     fs,
+    io::{BufRead, BufReader},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -25,7 +29,7 @@ pub fn now_epoch() -> i64 {
         .unwrap_or(0)
 }
 
-/// 递归收集 base 下指定扩展名的文件（深度不超过 max_depth，跳过符号链接，结果确定性排序）
+/// 递归收集 base 下指定扩展名的普通文件（深度不超过 max_depth，结果确定性排序）
 pub fn discover_files(base: &Path, extension: &str, max_depth: usize) -> Vec<PathBuf> {
     let mut files = Vec::new();
     collect_dir(base, extension, 0, max_depth, &mut files);
@@ -48,42 +52,128 @@ fn collect_dir(
             continue;
         };
         let path = entry.path();
-        if file_type.is_symlink() {
-            continue;
-        }
+        // 只跟随目录、只收集普通文件: symlink/FIFO/socket/设备一律跳过
+        // (FIFO 等特殊文件会让读取永久阻塞; symlink 的 file_type.is_file() 为 false)
         if file_type.is_dir() {
             if depth < max_depth {
                 collect_dir(&path, extension, depth + 1, max_depth, files);
             }
-        } else if path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case(extension))
+        } else if file_type.is_file()
+            && path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case(extension))
         {
             files.push(path);
         }
     }
 }
 
-/// 逐行读取 JSONL，返回解析成功的行；畸形行直接跳过
-pub fn read_jsonl(path: &Path) -> Result<Vec<Value>, AppError> {
-    let content = fs::read(path).map_err(|e| io_err("read", path, e))?;
-    let mut out = Vec::new();
-    for line in content.split(|b| *b == b'\n') {
-        if line.is_empty() {
-            continue;
-        }
-        if let Ok(value) = serde_json::from_slice::<Value>(line) {
-            out.push(value);
-        }
-    }
-    Ok(out)
+/// 单行字节上限: 正常日志单行为 KB~MB 级, 上限防损坏/异常巨型行把内存撑爆
+const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
+
+/// 流式逐行读取 JSONL
+///
+/// 文件可达 GB 级, 禁止整读驻留: 逐行解析、处理完即释放, 峰值内存 O(单行)。
+/// - 行含任一 needle 字节串才解析回调, 否则零分配跳过(空 needles 全放行);
+///   needle 须为不含转义的 ASCII 字面量(如 "\"token_count\"")
+/// - 行超过 MAX_LINE_BYTES 整行跳过并每文件警告一次, 继续消费到换行为止
+/// - 畸形行/无效 UTF-8 行跳过(from_slice 语义与整读版逐字一致, 含 CRLF/末行无换行)
+/// - 文件打开/读失败返回 Err; 回调返回 false 提前终止
+pub fn for_each_jsonl(
+    path: &Path,
+    needles: &[&str],
+    on_line: impl FnMut(Value) -> bool,
+) -> Result<(), AppError> {
+    for_each_jsonl_with_cap(path, needles, MAX_LINE_BYTES, on_line)
 }
 
-/// 读取单个 JSON 对象文件（非 JSONL，如 gemini 的 session 文件）
+fn for_each_jsonl_with_cap(
+    path: &Path,
+    needles: &[&str],
+    max_line: usize,
+    mut on_line: impl FnMut(Value) -> bool,
+) -> Result<(), AppError> {
+    let file = fs::File::open(path).map_err(|e| io_err("open", path, e))?;
+    let mut reader = BufReader::with_capacity(64 * 1024, file);
+    let mut line: Vec<u8> = Vec::new();
+    let mut warned = false;
+    loop {
+        line.clear();
+        let mut oversized = false;
+        let mut eof = true; // 本次行是否以 EOF 收尾(而非换行符)
+        let mut any = false;
+        loop {
+            let buf = match reader.fill_buf() {
+                Ok(buf) => buf,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(io_err("read", path, e)),
+            };
+            if buf.is_empty() {
+                break;
+            }
+            eof = false;
+            any = true;
+            match buf.iter().position(|&b| b == b'\n') {
+                Some(nl) => {
+                    // 超限后不再拷贝, 仅消费到换行为止
+                    if !oversized && line.len() + nl <= max_line {
+                        line.extend_from_slice(&buf[..nl]);
+                    } else {
+                        oversized = true;
+                    }
+                    reader.consume(nl + 1);
+                }
+                None => {
+                    if !oversized && line.len() + buf.len() <= max_line {
+                        line.extend_from_slice(buf);
+                    } else {
+                        oversized = true;
+                    }
+                    let len = buf.len();
+                    reader.consume(len);
+                    continue; // 行未结束, 继续读
+                }
+            }
+            break; // 换行处行结束
+        }
+        if eof && !any {
+            return Ok(()); // 数据读完
+        }
+        if oversized {
+            if !warned {
+                warned = true;
+                eprintln!(
+                    "> {}: line(s) over {max_line} bytes skipped",
+                    path.display()
+                );
+            }
+            continue;
+        }
+        if !needles.is_empty() && !line_contains(&line, needles) {
+            continue;
+        }
+        if let Ok(value) = serde_json::from_slice::<Value>(&line)
+            && !on_line(value)
+        {
+            return Ok(());
+        }
+    }
+}
+
+/// 行是否包含任一 needle(字节级字面量比较)
+fn line_contains(line: &[u8], needles: &[&str]) -> bool {
+    needles.iter().filter(|n| !n.is_empty()).any(|n| {
+        let n = n.as_bytes();
+        line.windows(n.len()).any(|w| w == n)
+    })
+}
+
+/// 读取单个 JSON 对象文件（非 JSONL，如 gemini 的 session 文件）; 流式解析避免整读双缓冲
+/// (打开/读错误经 serde 统一包装为 Corrupted, 调用方按整体失败处理)
 pub fn read_json(path: &Path) -> Result<Value, AppError> {
-    let content = fs::read(path).map_err(|e| io_err("read", path, e))?;
-    serde_json::from_slice(&content).map_err(|e| json_err(path, e))
+    let file = fs::File::open(path).map_err(|e| io_err("open", path, e))?;
+    serde_json::from_reader(file).map_err(|e| json_err(path, e))
 }
 
 /// 从 JSON 值按路径取 u64，缺失或类型不符返回 0

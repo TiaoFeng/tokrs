@@ -40,12 +40,86 @@ fn test_discover_files_missing_base_is_empty() {
 }
 
 #[test]
-fn test_read_jsonl_skips_malformed_lines() {
+fn test_for_each_jsonl_skips_malformed_lines() {
     let path = temp_dir("jsonl").join("f.jsonl");
-    fs::write(&path, "{\"a\":1}\nnot-json\n{\"a\":2}\n\n{\"a\":3}").unwrap();
-    let rows = read_jsonl(&path).unwrap();
-    assert_eq!(rows.len(), 3);
+    // 畸形行/空行跳过; 末行无换行符仍解析; CRLF 行容忍尾随 \r
+    fs::write(
+        &path,
+        "{\"a\":1}\nnot-json\n{\"a\":2}\n\n{\"a\":3}\r\n{\"a\":4}",
+    )
+    .unwrap();
+    let mut rows = Vec::new();
+    for_each_jsonl(&path, &[], |v| {
+        rows.push(v);
+        true
+    })
+    .unwrap();
+    assert_eq!(rows.len(), 4);
+    assert_eq!(rows[0]["a"], 1);
     assert_eq!(rows[2]["a"], 3);
+    assert_eq!(rows[3]["a"], 4);
+}
+
+#[test]
+fn test_for_each_jsonl_early_stop_and_needles() {
+    let path = temp_dir("needles").join("f.jsonl");
+    fs::write(
+        &path,
+        "{\"t\":\"x\"}\n{\"k\":\"hit\"}\n{\"t\":\"y\"}\n{\"k\":\"hit2\"}",
+    )
+    .unwrap();
+    // needle 预过滤: 不含字面量的行零解析跳过("hit2" 不含 "hit"——缺收尾引号)
+    let mut hits = Vec::new();
+    for_each_jsonl(&path, &["\"hit\""], |v| {
+        hits.push(v);
+        true
+    })
+    .unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0]["k"], "hit");
+    // 回调返回 false 提前终止
+    let mut stopped = Vec::new();
+    for_each_jsonl(&path, &[], |v| {
+        stopped.push(v);
+        false
+    })
+    .unwrap();
+    assert_eq!(stopped.len(), 1);
+}
+
+#[test]
+fn test_for_each_jsonl_oversized_line_skipped() {
+    let path = temp_dir("oversize").join("f.jsonl");
+    // 行上限参数化: 超限行整行跳过(丢弃直到换行), 后续合法行正常解析
+    let big = format!("\"{}\"", "x".repeat(300));
+    fs::write(&path, format!("{big}\n{{\"ok\":1}}\n")).unwrap();
+    let mut rows = Vec::new();
+    for_each_jsonl_with_cap(&path, &[], 128, |v| {
+        rows.push(v);
+        true
+    })
+    .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["ok"], 1);
+}
+
+#[test]
+#[cfg(unix)]
+fn test_discover_files_skips_fifo() {
+    let base = temp_dir("fifo");
+    fs::write(base.join("real.jsonl"), "{}").unwrap();
+    let ok = std::process::Command::new("mkfifo")
+        .arg(base.join("pipe.jsonl"))
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !ok {
+        return; // 环境无 mkfifo 时跳过验证
+    }
+    // FIFO/socket/设备不被收集, 防读取永久阻塞(真卡死)
+    let found = discover_files(&base, "jsonl", 1);
+    assert_eq!(found, vec![base.join("real.jsonl")]);
+    fs::remove_dir_all(&base).ok();
 }
 
 #[test]

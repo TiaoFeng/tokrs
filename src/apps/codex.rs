@@ -243,11 +243,15 @@ struct ParseState {
     previous: Option<Signature>,
 }
 
+/// 行级预过滤 needle: rollout 里绝大多数行是对话正文/工具输出, 只解析可能相关的
+/// 三类事件(字节串不含转义), 其余零分配跳过(对齐 cc-switch 的 substring 快筛)
+const CODEX_LINE_NEEDLES: [&str; 3] = ["\"session_meta\"", "\"turn_context\"", "\"token_count\""];
+
 fn parse_file(file: &Path) -> Result<ParsedFile, AppError> {
     let mut meta: Option<MetaInfo> = None;
     let mut state = ParseState::default();
     let mut events = Vec::new();
-    for line in load::read_jsonl(file)? {
+    load::for_each_jsonl(file, &CODEX_LINE_NEEDLES, |line| {
         match load::str_get(&line, &["type"]) {
             // 仅首条 session_meta 生效(对齐 cc-switch root_meta_seen)
             Some("session_meta") if meta.is_none() => {
@@ -272,7 +276,8 @@ fn parse_file(file: &Path) -> Result<ParsedFile, AppError> {
             Some("event_msg") => parse_token_count(&line, &mut state, &mut events),
             _ => {}
         }
-    }
+        true
+    })?;
     // 身份一致性: session_meta.id 与文件名 uuid(尾部/双段前置)均存在时必须匹配;
     // 文件名无 uuid 时无从校验, 放行
     let tail = thread_id_from_filename(file);

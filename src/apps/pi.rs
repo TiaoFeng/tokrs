@@ -59,23 +59,29 @@ pub fn collect_from(roots: &[PathBuf]) -> Result<Vec<UsageEntry>, AppError> {
 }
 
 fn parse_session(file: &Path, candidates: &mut HashMap<String, UsageEntry>) {
-    let Ok(records) = load::read_jsonl(file) else {
-        return;
-    };
-    // 首条有效 JSON 必须是 session header(畸形行已被 read_jsonl 过滤, 对齐参考实现)
-    let Some(first) = records.first() else {
-        return;
-    };
-    if load::str_get(first, &["type"]) != Some("session") {
-        return;
-    }
-    let session_id = load::str_get(first, &["id"]).unwrap_or("unknown");
-    let header_ts = first.get("timestamp").and_then(load::timestamp_to_epoch);
-    for entry in records.iter().skip(1) {
-        if let Some((key, record)) = parse_entry(entry, session_id, header_ts) {
+    let mut first_seen = false;
+    let mut session_id = "unknown".to_string();
+    let mut header_ts: Option<i64> = None;
+    // 首条有效 JSON 必须是 session header(畸形行已被流式过滤, 对齐参考实现);
+    // 首条非 header 则整文件跳过(回调返回 false 提前终止)。
+    // 文件级读取错误吞掉(原行为); 逐行流式防 GB 级文件整读驻留
+    let _ = load::for_each_jsonl(file, &[], |entry| {
+        if !first_seen {
+            first_seen = true;
+            if load::str_get(&entry, &["type"]) != Some("session") {
+                return false;
+            }
+            session_id = load::str_get(&entry, &["id"])
+                .unwrap_or("unknown")
+                .to_string();
+            header_ts = entry.get("timestamp").and_then(load::timestamp_to_epoch);
+            return true;
+        }
+        if let Some((key, record)) = parse_entry(&entry, &session_id, header_ts) {
             candidates.insert(key, record);
         }
-    }
+        true
+    });
 }
 
 fn parse_entry(

@@ -27,12 +27,14 @@ pub fn collect_from(base: &Path) -> Result<Vec<UsageEntry>, AppError> {
     let mut candidates: HashMap<String, Candidate> = HashMap::new();
     for file in load::discover_files(base, "jsonl", MAX_DEPTH) {
         let mut session_fallback: Option<String> = None;
-        for value in load::read_jsonl(&file)? {
+        // 流式逐行: 文件可达 GB 级, 整读驻留会耗尽内存
+        load::for_each_jsonl(&file, &[], |value| {
             if session_fallback.is_none() {
                 session_fallback = load::str_get(&value, &["sessionId"]).map(str::to_string);
             }
             parse_assistant_line(&value, session_fallback.as_deref(), &mut candidates);
-        }
+            true
+        })?;
     }
     Ok(candidates.into_values().map(|c| c.entry).collect())
 }
