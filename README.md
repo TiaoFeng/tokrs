@@ -6,11 +6,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/language-Rust-orange.svg)](https://www.rust-lang.org/)
 
-一个使用 Rust 编写的本地 Token 用量统计 CLI。直接读取 Claude Code、Codex、OpenCode、Gemini CLI、Grok Build、Pi 在本地留下的日志/数据库文件，统计各 app、各模型、各日期的 Token 消耗与成本。无任何守护进程、无任何网络请求、对数据源只读。
+一个使用 Rust 编写的本地 Token 用量统计 CLI。直接读取 Claude Code、Codex、OpenCode、Gemini CLI、Grok Build、Pi、Kimi Code 在本地留下的日志/数据库文件，统计各 app、各模型、各日期的 Token 消耗与成本。无任何守护进程、无任何网络请求、对数据源只读。
 
 ## 特性
 
-- 支持 6 种 agent：Claude / Codex / OpenCode / Gemini / Grok / Pi
+- 支持 7 种 agent：Claude / Codex / OpenCode / Gemini / Grok / Pi / Kimi
 - 按 app、模型、日期三种维度分组统计
 - 支持按起止日期（`--since` / `--until`）筛选
 - 成本估算四级优先：
@@ -32,6 +32,7 @@
 | Gemini | `~/.gemini/tmp/*/chats/session-*.json` | 单 JSON 对象，损坏文件跳过 |
 | Grok | `~/.grok/{sessions,archived_sessions}/**/updates.jsonl` | 逐轮 `turn_completed` 面值 |
 | Pi | `~/.pi/agent/sessions/*.jsonl`（可用 `$PI_CODING_AGENT_SESSION_DIR` 覆盖） | 按 entry.id / 内容哈希去重 |
+| Kimi | `~/.kimi-code/sessions/**/agents/*/wire.jsonl` | `usage.record` 每调用面值，model 剥 provider 前缀归一（与 codex 同款），内容签名去重（fork 副本不双算） |
 
 ## 安装
 
@@ -121,7 +122,7 @@ tokrs [--app <APPS>] [--by <GROUP>] [--since <DATE>] [--until <DATE>] [--json]
 
 | 参数 | 说明 |
 |---|---|
-| `--app <a,b,c>` | 只统计指定 app，逗号分隔，可选值：`claude` `codex` `opencode` `gemini` `grok` `pi`；缺省统计全部 |
+| `--app <a,b,c>` | 只统计指定 app，逗号分隔，可选值：`claude` `codex` `opencode` `gemini` `grok` `pi` `kimi`；缺省统计全部 |
 | `--by <GROUP>` | 分组方式：`app`（默认）/ `model` / `day` |
 | `-s, --since <YYYY-MM-DD>` | 起始日期（含），按本地时区 |
 | `-u, --until <YYYY-MM-DD>` | 结束日期（含），按本地时区 |
@@ -246,13 +247,14 @@ src/
 ├── tokens.rs         # 统计核心：日期筛选、按 app/model/day 分组、总量
 ├── error.rs          # AppError 自定义错误类型
 ├── apps/
-│   ├── mod.rs        # 各数据源统一收集 + fresh input 归一
+│   ├── mod.rs        # 各数据源统一收集 + fresh input / provider 前缀归一
 │   ├── claude.rs     # ~/.claude/projects/**/*.jsonl
 │   ├── codex.rs      # ~/.codex/{sessions,archived_sessions}
 │   ├── opencode.rs   # ~/.local/share/opencode/opencode.db（SQLite 只读）
 │   ├── gemini.rs     # ~/.gemini/tmp/*/chats/session-*.json
 │   ├── grok.rs       # ~/.grok/{sessions,archived_sessions}/**/updates.jsonl
 │   ├── pi.rs         # ~/.pi/agent/sessions/*.jsonl
+│   ├── kimi.rs       # ~/.kimi-code/sessions/**/agents/*/wire.jsonl
 │   └── prince.rs     # pricing.json 定价（版本价 / 长上下文 / 峰时 / force）
 ├── io/
 │   ├── load.rs       # JSON/JSONL 解码、时间戳归一（epoch 秒）

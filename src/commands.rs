@@ -39,6 +39,7 @@ enum AppArg {
     Gemini,
     Grok,
     Pi,
+    Kimi,
 }
 
 impl AppArg {
@@ -50,6 +51,7 @@ impl AppArg {
             AppArg::Gemini => AppKind::Gemini,
             AppArg::Grok => AppKind::Grok,
             AppArg::Pi => AppKind::Pi,
+            AppArg::Kimi => AppKind::Kimi,
         }
     }
 }

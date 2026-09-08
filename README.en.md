@@ -6,11 +6,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/language-Rust-orange.svg)](https://www.rust-lang.org/)
 
-A native token usage statistics CLI written in Rust. It directly reads the log and database files left by Claude Code, Codex, OpenCode, Gemini CLI, Grok Build, and Pi on the local machine to track token consumption and costs by app, model, and date. It has no daemons, makes no network requests, and accesses data sources in read-only mode.
+A native token usage statistics CLI written in Rust. It directly reads the log and database files left by Claude Code, Codex, OpenCode, Gemini CLI, Grok Build, Pi, and Kimi Code on your local machine to track token consumption and costs by app, model, and date. It has no daemons, makes no network requests, and accesses data sources in read-only mode.
 
 ## Features
 
-- Supports 6 agents: Claude / Codex / OpenCode / Gemini / Grok / Pi
+- Supports 7 agents: Claude / Codex / OpenCode / Gemini / Grok / Pi / Kimi
 - Grouped statistics by three dimensions: app, model, and date
 - Supports filtering by start and end dates (`--since` / `--until`)
 - Four-tier priority for cost estimation:
@@ -32,6 +32,8 @@ A native token usage statistics CLI written in Rust. It directly reads the log a
 | Gemini | `~/.gemini/tmp/*/chats/session-*.json` | Single JSON object; skip corrupted files |
 | Grok | `~/.grok/{sessions,archived_sessions}/**/updates.jsonl` | Check `turn_completed` value per round |
 | Pi | `~/.pi/agent/sessions/*.jsonl` (can be overridden with `$PI_CODING_AGENT_SESSION_DIR`) | Deduped by `entry.id` / content hash |
+| Kimi | `~/.kimi-code/sessions/**/agents/*/wire.jsonl` | `usage.record`: For each call, the model strips the provider prefix (same as Codex) and removes duplicates from the content signatures (fork copies are not counted twice) |
+
 
 ## Installation
 
@@ -121,7 +123,7 @@ tokrs [--app <APPS>] [--by <GROUP>] [--since <DATE>] [--until <DATE>] [--json]
 
 | Parameter | Description |
 |---|---|
-| `--app <a,b,c>` | Count only the specified apps (comma-separated); valid values: `claude`, `codex`, `opencode`, `gemini`, `grok`, `pi`; by default, count all |
+| `--app <a,b,c>` | Count only the specified apps (comma-separated); available values: `claude`, `codex`, `opencode`, `gemini`, `grok`, `pi`, `kimi`; by default, count all |
 | `--by <GROUP>` | Grouping method: `app` (default) / `model` / `day` |
 | `-s, --since <YYYY-MM-DD>` | Start date (inclusive), based on local time zone |
 | `-u, --until <YYYY-MM-DD>` | End date (inclusive), based on local time zone |
@@ -246,13 +248,14 @@ src/
 ├── tokens.rs         # Core statistics: date filtering, grouping by app/model/day, total counts
 ├── error.rs          # AppError custom error type
 ├── apps/
-│   ├── mod.rs        # Unified collection from various data sources + normalization of fresh input
+│   ├── mod.rs        # Unified collection from various data sources + standardization of “fresh input” and “provider” prefixes
 │   ├── claude.rs     # ~/.claude/projects/**/*.jsonl
 │   ├── codex.rs      # ~/.codex/{sessions,archived_sessions}
-│   ├── opencode.rs   # ~/.local/share/opencode/opencode.db (SQLite, read-only)
+│   ├── opencode.rs   # ~/.local/share/opencode/opencode.db (SQLite read-only)
 │   ├── gemini.rs     # ~/.gemini/tmp/*/chats/session-*.json
 │   ├── grok.rs       # ~/.grok/{sessions,archived_sessions}/**/updates.jsonl
 │   ├── pi.rs         # ~/.pi/agent/sessions/*.jsonl
+│   ├── kimi.rs       # ~/.kimi-code/sessions/**/agents/*/wire.jsonl
 │   └── prince.rs     # pricing.json (version pricing / long context / peak hours / force)
 ├── io/
 │   ├── load.rs       # JSON/JSONL decoding, timestamp normalization (epoch seconds)

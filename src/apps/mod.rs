@@ -2,6 +2,7 @@ pub mod claude;
 pub mod codex;
 pub mod gemini;
 pub mod grok;
+pub mod kimi;
 pub mod opencode;
 pub mod pi;
 pub mod prince;
@@ -20,6 +21,17 @@ pub fn fresh_input(input: u64, cache_read: u64, cache_creation: u64) -> u64 {
         .unwrap_or(input)
 }
 
+/// 剥离模型名的 provider 前缀, 统一以裸 model id 落表(与 codex normalize 同方向)
+///
+/// 取最后一个 '/' 之后的段(moonshot-cn/kimi-k3 -> kimi-k3), 使同模型跨渠道合并计价;
+/// 斜杠后为空或无斜杠时原样返回, 由调用方处理 unknown 兜底
+pub fn strip_provider(model: &str) -> &str {
+    match model.rfind('/') {
+        Some(pos) if pos + 1 < model.len() => &model[pos + 1..],
+        _ => model,
+    }
+}
+
 pub fn collect(apps: &[AppKind]) -> Result<Vec<UsageEntry>, AppError> {
     let mut entries = Vec::new();
     for &app in apps {
@@ -30,6 +42,7 @@ pub fn collect(apps: &[AppKind]) -> Result<Vec<UsageEntry>, AppError> {
             AppKind::Gemini => entries.extend(gemini::collect()?),
             AppKind::Grok => entries.extend(grok::collect()?),
             AppKind::Pi => entries.extend(pi::collect()?),
+            AppKind::Kimi => entries.extend(kimi::collect()?),
         }
     }
     Ok(entries)
@@ -37,7 +50,7 @@ pub fn collect(apps: &[AppKind]) -> Result<Vec<UsageEntry>, AppError> {
 
 #[cfg(test)]
 mod tests {
-    use super::fresh_input;
+    use super::{fresh_input, strip_provider};
 
     #[test]
     fn test_fresh_input() {
@@ -45,5 +58,13 @@ mod tests {
         assert_eq!(fresh_input(100, 50, 20), 30);
         assert_eq!(fresh_input(50, 0, 0), 50);
         assert_eq!(fresh_input(10, 20, 0), 10); // 上游数据不一致时保守不扣
+    }
+
+    #[test]
+    fn test_strip_provider() {
+        assert_eq!(strip_provider("moonshot-cn/kimi-k3"), "kimi-k3");
+        assert_eq!(strip_provider("a/b/kimi-k3"), "kimi-k3"); // 多级取最后一段
+        assert_eq!(strip_provider("kimi-k3"), "kimi-k3"); // 无斜杠原样
+        assert_eq!(strip_provider("moonshot-cn/"), "moonshot-cn/"); // 斜杠后为空, 原样交给调用方兜底
     }
 }
