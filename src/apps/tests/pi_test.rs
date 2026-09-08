@@ -215,6 +215,30 @@ fn test_content_hash_dedup_without_id() {
 }
 
 #[test]
+fn test_content_hash_distinguishes_content() {
+    let base = temp_dir();
+    // timestamp + usage 相同但条目内容不同(model 字段差异): 完整条目哈希下各自计数
+    let a = message_entry(
+        None,
+        TS,
+        "assistant",
+        &model_field("m-a"),
+        &usage_json(6, 6, 0, 0),
+    );
+    let b = message_entry(
+        None,
+        TS,
+        "assistant",
+        &model_field("m-b"),
+        &usage_json(6, 6, 0, 0),
+    );
+    write_file(&base, "s6.jsonl", &[header("s-6", TS), a, b]);
+    let entries = collect_from(std::slice::from_ref(&base)).unwrap();
+    assert_eq!(entries.len(), 2);
+    fs::remove_dir_all(&base).ok();
+}
+
+#[test]
 fn test_zero_and_malformed_skipped_with_header_ts_fallback() {
     let base = temp_dir();
     // 缺 entry 时间戳: 回退 header 时间戳

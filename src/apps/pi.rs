@@ -3,7 +3,7 @@
 //! 数据源: $PI_CODING_AGENT_SESSION_DIR 或 ~/.pi/agent/sessions 或 ~/.pi/sessions 下的 *.jsonl
 //! 每个会话文件首条有效 JSON 必须是 type=="session" header, 否则整文件跳过
 //! 统计 assistant/toolResult 消息与 compaction/branch_summary 条目的 usage
-//! 去重键: 有 entry.id 用 kind:entry.id(last-wins), 否则用内容哈希
+//! 去重键: 有 entry.id 用 kind:entry.id(last-wins), 否则用整条条目内容哈希(完整 entry JSON)
 //! 参考: cc-switch session_usage_pi.rs (增量游标/接管状态机等有状态逻辑不适用本工具)
 //!
 use serde_json::Value;
@@ -130,7 +130,7 @@ fn parse_entry(
         .unwrap_or_else(load::now_epoch);
     let key = match load::str_get(entry, &["id"]).filter(|s| !s.is_empty()) {
         Some(id) => format!("id:{kind}:{id}"),
-        None => format!("hash:{kind}:{}", content_hash(entry, usage)),
+        None => format!("hash:{kind}:{}", content_hash(entry)),
     };
     Some((
         key,
@@ -154,15 +154,14 @@ fn nonempty_str<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
 
 /// entry.id 缺失时的内容哈希去重
 ///
+/// 哈希完整条目 JSON: 任何内容差异都各自计数, 避免 timestamp+usage 相同的
+/// 不同条目被误合并; fork/恢复逐字节复制整条 entry, 哈希不变, 去重不受影响.
 /// serde_json 默认用 BTreeMap 存对象, 序列化与哈希顺序确定;
 /// DefaultHasher::new() 固定 key(0,0), 跨进程结果同样稳定, 只是本工具
 /// 每次全量重扫, 单进程内去重即足够, 故用 std 哈希不加 sha2 依赖
-fn content_hash(entry: &Value, usage: &Value) -> u64 {
+fn content_hash(entry: &Value) -> u64 {
     let mut hasher = DefaultHasher::new();
-    if let Some(ts) = entry.get("timestamp") {
-        ts.hash(&mut hasher);
-    }
-    usage.hash(&mut hasher);
+    entry.hash(&mut hasher);
     hasher.finish()
 }
 

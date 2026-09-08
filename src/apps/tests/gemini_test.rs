@@ -151,6 +151,58 @@ fn test_missing_id_and_model_fallback() {
 }
 
 #[test]
+fn test_missing_id_messages_counted_individually() {
+    let base = temp_dir();
+    let doc = session_json(
+        "s",
+        &[
+            r#"{"type":"gemini","timestamp":"2026-09-01T10:00:00Z","tokens":{"input":10,"output":1,"cached":0,"thoughts":0}}"#.to_string(),
+            r#"{"type":"gemini","timestamp":"2026-09-01T10:01:00Z","tokens":{"input":20,"output":2,"cached":0,"thoughts":0}}"#.to_string(),
+        ],
+    );
+    write_session(&base, "p", "session-1.json", &doc);
+    let entries = collect_from(&base).unwrap();
+    // 缺 id 消息用内容哈希兜底: 各自计数, 不折叠进固定 unknown 键互相覆盖
+    assert_eq!(entries.len(), 2);
+    fs::remove_dir_all(&base).ok();
+}
+
+#[test]
+fn test_missing_id_identical_content_deduped() {
+    let base = temp_dir();
+    let doc = session_json(
+        "s",
+        &[
+            r#"{"type":"gemini","timestamp":"2026-09-01T10:00:00Z","tokens":{"input":10,"output":1,"cached":0,"thoughts":0}}"#.to_string(),
+            r#"{"type":"gemini","timestamp":"2026-09-01T10:00:00Z","tokens":{"input":10,"output":1,"cached":0,"thoughts":0}}"#.to_string(),
+        ],
+    );
+    write_session(&base, "p", "session-2.json", &doc);
+    let entries = collect_from(&base).unwrap();
+    // 内容完全相同的无 id 消息仍去重(last-wins 语义保留)
+    assert_eq!(entries.len(), 1);
+    fs::remove_dir_all(&base).ok();
+}
+
+#[test]
+fn test_missing_id_same_usage_different_content_counted() {
+    let base = temp_dir();
+    let doc = session_json(
+        "s",
+        &[
+            // timestamp/tokens/model 相同但消息内容不同(text 字段): 各自计数
+            r#"{"type":"gemini","timestamp":"2026-09-01T10:00:00Z","model":"m","text":"a","tokens":{"input":10,"output":1,"cached":0,"thoughts":0}}"#.to_string(),
+            r#"{"type":"gemini","timestamp":"2026-09-01T10:00:00Z","model":"m","text":"b","tokens":{"input":10,"output":1,"cached":0,"thoughts":0}}"#.to_string(),
+        ],
+    );
+    write_session(&base, "p", "session-3.json", &doc);
+    let entries = collect_from(&base).unwrap();
+    // 完整消息哈希: 任何内容差异都各自计数
+    assert_eq!(entries.len(), 2);
+    fs::remove_dir_all(&base).ok();
+}
+
+#[test]
 fn test_missing_base_returns_empty() {
     let base = temp_dir();
     fs::remove_dir_all(&base).unwrap();
