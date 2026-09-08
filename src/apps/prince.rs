@@ -20,7 +20,7 @@ use crate::tokens::local_date;
 const PRICING_VERSION: u32 = 1;
 
 /// 一组可选价格字段(USD / 1M tokens), null 表示未填
-#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct PricingFields {
     #[serde(default)]
     pub input: Option<f64>,
@@ -207,7 +207,7 @@ fn match_version<'a>(table: &'a PricingFile, entry: &UsageEntry) -> Option<&'a P
 
 /// 按定价版本估算单条 entry 成本(USD); 基础价全空(未填)返回 None
 fn estimate(entry: &UsageEntry, version: &PricingVersion) -> Option<f64> {
-    let mut fields = version.fields.clone();
+    let mut fields = version.fields;
     // 基础价全 null 视为"用户未填", 不计成本
     if fields.is_empty() {
         return None;

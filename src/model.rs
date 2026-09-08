@@ -1,15 +1,17 @@
 //! 项目通用结构体与枚举
 //!
-//! 定义了AppKind(app类型)枚举,列举支持的app
+//! 定义了AppKind(app类型)枚举,列举支持的app,经 clap::ValueEnum 直接驱动 --app 参数
 //! 定义了UsageEntry结构体保存用户数据
 //! 定义了TokenTotals结构体用于从用户请求数据统计Token的数量
 //!
+use clap::ValueEnum;
 use std::fmt;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, ValueEnum)]
 pub enum AppKind {
     Claude,
     Codex,
+    #[value(name = "opencode")]
     OpenCode,
     Gemini,
     Grok,
@@ -44,25 +46,6 @@ impl AppKind {
 impl fmt::Display for AppKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
-    }
-}
-
-impl std::str::FromStr for AppKind {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "claude" => Ok(AppKind::Claude),
-            "codex" => Ok(AppKind::Codex),
-            "opencode" => Ok(AppKind::OpenCode),
-            "gemini" => Ok(AppKind::Gemini),
-            "grok" => Ok(AppKind::Grok),
-            "pi" => Ok(AppKind::Pi),
-            "kimi" => Ok(AppKind::Kimi),
-            other => Err(format!(
-                "unknown app '{other}', expected one of: claude, codex, opencode, gemini, grok, pi, kimi"
-            )),
-        }
     }
 }
 

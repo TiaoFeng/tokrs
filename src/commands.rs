@@ -27,35 +27,6 @@ enum GroupBy {
     Day,
 }
 
-/// 指定app参数枚举
-///
-/// 为输入指定的每个app的名称参数，实现解析对应的AppKind结构体方法
-#[derive(Clone, Copy, Debug, ValueEnum)]
-enum AppArg {
-    Claude,
-    Codex,
-    #[value(name = "opencode")]
-    OpenCode,
-    Gemini,
-    Grok,
-    Pi,
-    Kimi,
-}
-
-impl AppArg {
-    fn kind(self) -> AppKind {
-        match self {
-            AppArg::Claude => AppKind::Claude,
-            AppArg::Codex => AppKind::Codex,
-            AppArg::OpenCode => AppKind::OpenCode,
-            AppArg::Gemini => AppKind::Gemini,
-            AppArg::Grok => AppKind::Grok,
-            AppArg::Pi => AppKind::Pi,
-            AppArg::Kimi => AppKind::Kimi,
-        }
-    }
-}
-
 /// Cli命令结构体
 #[derive(Parser)]
 #[command(name = "tokrs", about = "Local Token Usage Statistics CLI")]
@@ -63,10 +34,17 @@ pub struct Cli {
     #[arg(
         long,
         value_delimiter = ',',
+        ignore_case = true,
         help = "Applications of Statistics (Claude, Codex, OpenCode, Gemini, Grok, Pi, Kimi)—all by default"
     )]
-    app: Vec<AppArg>,
-    #[arg(long, value_enum, default_value_t = GroupBy::App, help = "Grouping")]
+    app: Vec<AppKind>,
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = GroupBy::App,
+        ignore_case = true,
+        help = "Grouping"
+    )]
     by: GroupBy,
     #[arg(long, short, help = "Start Date YYYY-MM-DD (inclusive)")]
     since: Option<NaiveDate>,
@@ -83,7 +61,7 @@ pub fn run(cli: Cli) -> Result<(), AppError> {
     } else {
         cli.app
             .iter()
-            .map(|a| a.kind())
+            .copied()
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect()
