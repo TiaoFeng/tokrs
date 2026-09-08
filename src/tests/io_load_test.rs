@@ -49,7 +49,7 @@ fn test_for_each_jsonl_skips_malformed_lines() {
     )
     .unwrap();
     let mut rows = Vec::new();
-    for_each_jsonl(&path, &[], |v| {
+    for_each_jsonl_impl(&path, &[], MAX_LINE_BYTES, None, |v| {
         rows.push(v);
         true
     })
@@ -70,7 +70,7 @@ fn test_for_each_jsonl_early_stop_and_needles() {
     .unwrap();
     // needle 预过滤: 不含字面量的行零解析跳过("hit2" 不含 "hit"——缺收尾引号)
     let mut hits = Vec::new();
-    for_each_jsonl(&path, &["\"hit\""], |v| {
+    for_each_jsonl_impl(&path, &["\"hit\""], MAX_LINE_BYTES, None, |v| {
         hits.push(v);
         true
     })
@@ -79,7 +79,7 @@ fn test_for_each_jsonl_early_stop_and_needles() {
     assert_eq!(hits[0]["k"], "hit");
     // 回调返回 false 提前终止
     let mut stopped = Vec::new();
-    for_each_jsonl(&path, &[], |v| {
+    for_each_jsonl_impl(&path, &[], MAX_LINE_BYTES, None, |v| {
         stopped.push(v);
         false
     })
@@ -94,7 +94,7 @@ fn test_for_each_jsonl_oversized_line_skipped() {
     let big = format!("\"{}\"", "x".repeat(300));
     fs::write(&path, format!("{big}\n{{\"ok\":1}}\n")).unwrap();
     let mut rows = Vec::new();
-    for_each_jsonl_with_cap(&path, &[], 128, |v| {
+    for_each_jsonl_impl(&path, &[], 128, None, |v| {
         rows.push(v);
         true
     })

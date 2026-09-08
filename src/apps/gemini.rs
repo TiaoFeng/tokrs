@@ -16,7 +16,7 @@ use std::{
 use crate::{
     apps::{fresh_input, normalize_model},
     error::AppError,
-    io::load,
+    io::{load, progress::Progress},
     model::{AppKind, UsageEntry},
 };
 
@@ -33,17 +33,27 @@ pub fn collect() -> Result<Vec<UsageEntry>, AppError> {
 pub fn collect_from(base: &Path) -> Result<Vec<UsageEntry>, AppError> {
     // 去重键: 消息 id, 后出现者覆盖(对应 cc-switch 的 UPSERT 语义)
     let mut candidates: HashMap<String, UsageEntry> = HashMap::new();
+    let mut files = Vec::new();
     for file in load::discover_files(base, "json", MAX_DEPTH) {
         let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
         if !name.starts_with("session-") || !name.ends_with(".json") {
             continue;
         }
-        // 单个文件损坏不中断整体收集
-        let Ok(value) = load::read_json(&file) else {
-            continue;
-        };
-        parse_session(&value, &mut candidates);
+        files.push(file);
     }
+    let mut progress = Progress::start("gemini", load::total_bytes(&files));
+    for file in &files {
+        progress.set_file(load::file_name_str(file));
+        // 单 JSON 对象(非 JSONL): 粒度粗一档, 每读完一个文件按其大小推进
+        let size = std::fs::metadata(file).map(|m| m.len()).unwrap_or(0);
+        let result = load::read_json(file);
+        progress.add(size);
+        // 单个文件损坏不中断整体收集
+        if let Ok(value) = result {
+            parse_session(&value, &mut candidates);
+        }
+    }
+    progress.finish();
     Ok(candidates.into_values().collect())
 }
 

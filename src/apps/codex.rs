@@ -35,7 +35,7 @@ use std::{
 use crate::{
     apps::{fresh_input, normalize_model},
     error::AppError,
-    io::load,
+    io::{load, progress::Progress},
     model::{AppKind, UsageEntry},
 };
 
@@ -72,11 +72,20 @@ pub fn collect_from(base: &Path) -> Result<Vec<UsageEntry>, AppError> {
     files.retain(|f| is_rollout_filename(f));
     let files = dedupe_by_filename(files);
 
-    // Pass 1: 逐文件解析 meta 与 token 事件(文件内去重与 delta 计算在此完成)
+    // Pass 1: 逐文件解析 meta 与 token 事件(文件内去重与 delta 计算在此完成);
+    // 进度条覆盖本 pass(emit 为纯内存, 瞬时);
+    // 错误路径先收尾进度条再传播, 避免半截进度条污染错误输出
     let mut parsed: Vec<ParsedFile> = Vec::with_capacity(files.len());
-    for file in &files {
-        parsed.push(parse_file(file)?);
-    }
+    let mut progress = Progress::start("codex", load::total_bytes(&files));
+    let outcome: Result<(), AppError> = (|| {
+        for file in &files {
+            progress.set_file(load::file_name_str(file));
+            parsed.push(parse_file(file, &mut progress)?);
+        }
+        Ok(())
+    })();
+    progress.finish();
+    outcome?;
 
     // Pass 2: 以文件名 uuid 汇总父时间线, fork 回放段跳过后入账
     let timelines = build_timelines(&parsed);
@@ -247,11 +256,11 @@ struct ParseState {
 /// 三类事件(字节串不含转义), 其余零分配跳过(对齐 cc-switch 的 substring 快筛)
 const CODEX_LINE_NEEDLES: [&str; 3] = ["\"session_meta\"", "\"turn_context\"", "\"token_count\""];
 
-fn parse_file(file: &Path) -> Result<ParsedFile, AppError> {
+fn parse_file(file: &Path, progress: &mut Progress) -> Result<ParsedFile, AppError> {
     let mut meta: Option<MetaInfo> = None;
     let mut state = ParseState::default();
     let mut events = Vec::new();
-    load::for_each_jsonl(file, &CODEX_LINE_NEEDLES, |line| {
+    load::for_each_jsonl_progress(file, &CODEX_LINE_NEEDLES, progress, |line| {
         match load::str_get(&line, &["type"]) {
             // 仅首条 session_meta 生效(对齐 cc-switch root_meta_seen)
             Some("session_meta") if meta.is_none() => {

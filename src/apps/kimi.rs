@@ -14,13 +14,13 @@
 use serde_json::Value;
 use std::{
     collections::{HashMap, hash_map::Entry},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use crate::{
     apps::normalize_model,
     error::AppError,
-    io::load,
+    io::{load, progress::Progress},
     model::{AppKind, UsageEntry},
 };
 
@@ -35,19 +35,24 @@ pub fn collect() -> Result<Vec<UsageEntry>, AppError> {
 }
 
 pub fn collect_from(base: &Path) -> Result<Vec<UsageEntry>, AppError> {
+    // 预筛真正解析的文件(只认 wire.jsonl, 排除 tasks/blobs 等目录的其它 jsonl, 对齐 grok),
+    // 总字节数供进度条按字节推进
+    let files: Vec<PathBuf> = load::discover_files(base, "jsonl", MAX_DEPTH)
+        .into_iter()
+        .filter(|f| load::file_name_str(f) == "wire.jsonl")
+        .collect();
     // 全局 HashMap(跨文件), 与 claude 同款: fork 复制出的副本会话才能被去重
     let mut candidates: HashMap<String, UsageEntry> = HashMap::new();
-    for file in load::discover_files(base, "jsonl", MAX_DEPTH) {
-        // 只认 wire.jsonl, 排除 tasks/blobs 等目录下可能出现的其它 jsonl(对齐 grok)
-        if file.file_name().and_then(|n| n.to_str()) != Some("wire.jsonl") {
-            continue;
-        }
-        parse_wire(&file, &mut candidates);
+    let mut progress = Progress::start("kimi", load::total_bytes(&files));
+    for file in &files {
+        progress.set_file(load::file_name_str(file));
+        parse_wire(file, &mut progress, &mut candidates);
     }
+    progress.finish();
     Ok(candidates.into_values().collect())
 }
 
-fn parse_wire(file: &Path, candidates: &mut HashMap<String, UsageEntry>) {
+fn parse_wire(file: &Path, progress: &mut Progress, candidates: &mut HashMap<String, UsageEntry>) {
     // 会话 ID = 路径中 "session_" 前缀的祖先目录名(仅备查, 不进 dedup 键)
     let session_id = file.ancestors().find_map(|p| {
         p.file_name()
@@ -56,7 +61,7 @@ fn parse_wire(file: &Path, candidates: &mut HashMap<String, UsageEntry>) {
             .map(str::to_string)
     });
     // 文件级读取错误吞掉(原行为); 逐行流式防 GB 级文件整读驻留
-    let _ = load::for_each_jsonl(file, &[], |record| {
+    let _ = load::for_each_jsonl_progress(file, &[], progress, |record| {
         if load::str_get(&record, &["type"]) != Some("usage.record") {
             return true;
         }

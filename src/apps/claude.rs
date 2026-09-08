@@ -9,7 +9,7 @@ use std::{
 use crate::{
     apps::normalize_model,
     error::AppError,
-    io::load,
+    io::{load, progress::Progress},
     model::{AppKind, UsageEntry},
 };
 
@@ -25,17 +25,26 @@ pub fn collect() -> Result<Vec<UsageEntry>, AppError> {
 
 pub fn collect_from(base: &Path) -> Result<Vec<UsageEntry>, AppError> {
     let mut candidates: HashMap<String, Candidate> = HashMap::new();
-    for file in load::discover_files(base, "jsonl", MAX_DEPTH) {
-        let mut session_fallback: Option<String> = None;
-        // 流式逐行: 文件可达 GB 级, 整读驻留会耗尽内存
-        load::for_each_jsonl(&file, &[], |value| {
-            if session_fallback.is_none() {
-                session_fallback = load::str_get(&value, &["sessionId"]).map(str::to_string);
-            }
-            parse_assistant_line(&value, session_fallback.as_deref(), &mut candidates);
-            true
-        })?;
-    }
+    let files = load::discover_files(base, "jsonl", MAX_DEPTH);
+    let mut progress = Progress::start("claude", load::total_bytes(&files));
+    // 流式逐行: 文件可达 GB 级, 整读驻留会耗尽内存;
+    // 错误路径先收尾进度条再传播, 避免半截进度条污染错误输出
+    let outcome: Result<(), AppError> = (|| {
+        for file in &files {
+            progress.set_file(load::file_name_str(file));
+            let mut session_fallback: Option<String> = None;
+            load::for_each_jsonl_progress(file, &[], &mut progress, |value| {
+                if session_fallback.is_none() {
+                    session_fallback = load::str_get(&value, &["sessionId"]).map(str::to_string);
+                }
+                parse_assistant_line(&value, session_fallback.as_deref(), &mut candidates);
+                true
+            })?;
+        }
+        Ok(())
+    })();
+    progress.finish();
+    outcome?;
     Ok(candidates.into_values().map(|c| c.entry).collect())
 }
 

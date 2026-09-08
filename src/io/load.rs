@@ -11,6 +11,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use super::progress::Progress;
 use crate::error::{AppError, io_err, json_err};
 
 /// 返回用户home地址
@@ -72,26 +73,30 @@ fn collect_dir(
 /// 单行字节上限: 正常日志单行为 KB~MB 级, 上限防损坏/异常巨型行把内存撑爆
 const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
 
-/// 流式逐行读取 JSONL
+/// 进度感知变体: 每消费一段即向 progress 上报字节数(节流重绘在 Progress 内部);
+/// 其余语义见 for_each_jsonl_impl 文档
+pub fn for_each_jsonl_progress(
+    path: &Path,
+    needles: &[&str],
+    progress: &mut Progress,
+    on_line: impl FnMut(Value) -> bool,
+) -> Result<(), AppError> {
+    for_each_jsonl_impl(path, needles, MAX_LINE_BYTES, Some(progress), on_line)
+}
+
+/// 流式逐行读取 JSONL(私有内核)
 ///
 /// 文件可达 GB 级, 禁止整读驻留: 逐行解析、处理完即释放, 峰值内存 O(单行)。
 /// - 行含任一 needle 字节串才解析回调, 否则零分配跳过(空 needles 全放行);
 ///   needle 须为不含转义的 ASCII 字面量(如 "\"token_count\"")
-/// - 行超过 MAX_LINE_BYTES 整行跳过并每文件警告一次, 继续消费到换行为止
+/// - 行超过 max_line 整行跳过并每文件警告一次, 继续消费到换行为止
 /// - 畸形行/无效 UTF-8 行跳过(from_slice 语义与整读版逐字一致, 含 CRLF/末行无换行)
 /// - 文件打开/读失败返回 Err; 回调返回 false 提前终止
-pub fn for_each_jsonl(
-    path: &Path,
-    needles: &[&str],
-    on_line: impl FnMut(Value) -> bool,
-) -> Result<(), AppError> {
-    for_each_jsonl_with_cap(path, needles, MAX_LINE_BYTES, on_line)
-}
-
-fn for_each_jsonl_with_cap(
+fn for_each_jsonl_impl(
     path: &Path,
     needles: &[&str],
     max_line: usize,
+    mut progress: Option<&mut Progress>,
     mut on_line: impl FnMut(Value) -> bool,
 ) -> Result<(), AppError> {
     let file = fs::File::open(path).map_err(|e| io_err("open", path, e))?;
@@ -123,6 +128,9 @@ fn for_each_jsonl_with_cap(
                         oversized = true;
                     }
                     reader.consume(nl + 1);
+                    if let Some(p) = &mut progress {
+                        p.add((nl + 1) as u64);
+                    }
                 }
                 None => {
                     if !oversized && line.len() + buf.len() <= max_line {
@@ -132,6 +140,9 @@ fn for_each_jsonl_with_cap(
                     }
                     let len = buf.len();
                     reader.consume(len);
+                    if let Some(p) = &mut progress {
+                        p.add(len as u64);
+                    }
                     continue; // 行未结束, 继续读
                 }
             }
@@ -167,6 +178,19 @@ fn line_contains(line: &[u8], needles: &[&str]) -> bool {
         let n = n.as_bytes();
         line.windows(n.len()).any(|w| w == n)
     })
+}
+
+/// 文件列表总字节(进度条总量; metadata 失败按 0 计)
+pub fn total_bytes(files: &[PathBuf]) -> u64 {
+    files
+        .iter()
+        .map(|f| fs::metadata(f).map(|m| m.len()).unwrap_or(0))
+        .sum()
+}
+
+/// 文件名字符串(无文件名时为空串)
+pub fn file_name_str(path: &Path) -> &str {
+    path.file_name().and_then(|n| n.to_str()).unwrap_or("")
 }
 
 /// 读取单个 JSON 对象文件（非 JSONL，如 gemini 的 session 文件）; 流式解析避免整读双缓冲

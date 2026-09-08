@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use crate::{
     apps::normalize_model,
     error::AppError,
-    io::load,
+    io::{load, progress::Progress},
     model::{AppKind, UsageEntry},
 };
 
@@ -46,26 +46,36 @@ pub fn collect() -> Result<Vec<UsageEntry>, AppError> {
 pub fn collect_from(roots: &[PathBuf]) -> Result<Vec<UsageEntry>, AppError> {
     let mut candidates: HashMap<String, UsageEntry> = HashMap::new();
     let mut seen_files = std::collections::HashSet::new();
+    let mut files: Vec<PathBuf> = Vec::new();
     for root in roots {
         for file in load::discover_files(root, "jsonl", MAX_DEPTH) {
             // 多根目录可能重叠(如环境变量指向默认路径), 同文件只解析一次
-            if !seen_files.insert(file.clone()) {
-                continue;
+            if seen_files.insert(file.clone()) {
+                files.push(file);
             }
-            parse_session(&file, &mut candidates);
         }
     }
+    let mut progress = Progress::start("pi", load::total_bytes(&files));
+    for file in &files {
+        progress.set_file(load::file_name_str(file));
+        parse_session(file, &mut progress, &mut candidates);
+    }
+    progress.finish();
     Ok(candidates.into_values().collect())
 }
 
-fn parse_session(file: &Path, candidates: &mut HashMap<String, UsageEntry>) {
+fn parse_session(
+    file: &Path,
+    progress: &mut Progress,
+    candidates: &mut HashMap<String, UsageEntry>,
+) {
     let mut first_seen = false;
     let mut session_id = "unknown".to_string();
     let mut header_ts: Option<i64> = None;
     // 首条有效 JSON 必须是 session header(畸形行已被流式过滤, 对齐参考实现);
     // 首条非 header 则整文件跳过(回调返回 false 提前终止)。
     // 文件级读取错误吞掉(原行为); 逐行流式防 GB 级文件整读驻留
-    let _ = load::for_each_jsonl(file, &[], |entry| {
+    let _ = load::for_each_jsonl_progress(file, &[], progress, |entry| {
         if !first_seen {
             first_seen = true;
             if load::str_get(&entry, &["type"]) != Some("session") {

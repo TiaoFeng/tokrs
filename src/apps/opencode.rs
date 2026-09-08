@@ -5,7 +5,7 @@ use std::{collections::HashSet, path::Path};
 use crate::{
     apps::normalize_model,
     error::{AppError, sqlite_err},
-    io::load,
+    io::{load, progress},
     model::{AppKind, UsageEntry},
 };
 
@@ -25,6 +25,8 @@ pub fn collect_from(db_path: &Path) -> Result<Vec<UsageEntry>, AppError> {
     if !db_path.is_file() {
         return Ok(Vec::new());
     }
+    // 无文件字节流可推进(SQLite 单查询), 仅 TTY 起止提示
+    progress::stderr_note(&format!("opencode: scanning {}", db_path.display()));
     let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| sqlite_err(db_path, e))?;
     let mut stmt = conn
@@ -52,6 +54,7 @@ pub fn collect_from(db_path: &Path) -> Result<Vec<UsageEntry>, AppError> {
         }
         parse_message(&data, &session_id, &mut entries);
     }
+    progress::stderr_note("opencode: done");
     Ok(entries)
 }
 

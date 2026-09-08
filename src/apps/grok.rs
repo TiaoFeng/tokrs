@@ -7,12 +7,15 @@
 //! 参考: cc-switch session_usage_grokbuild.rs
 //!
 use serde_json::Value;
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use crate::{
     apps::{fresh_input, normalize_model},
     error::AppError,
-    io::load,
+    io::{load, progress::Progress},
     model::{AppKind, UsageEntry},
 };
 
@@ -27,20 +30,28 @@ pub fn collect() -> Result<Vec<UsageEntry>, AppError> {
 }
 
 pub fn collect_from(base: &Path) -> Result<Vec<UsageEntry>, AppError> {
+    // 预筛真正解析的文件(只认 updates.jsonl), 总字节数供进度条按字节推进
+    let mut files: Vec<PathBuf> = Vec::new();
+    for root in ["sessions", "archived_sessions"] {
+        files.extend(load::discover_files(&base.join(root), "jsonl", MAX_DEPTH));
+    }
+    files.retain(|f| load::file_name_str(f) == "updates.jsonl");
     // 去重键: session_id:prompt_id(缺失时为事件序号):model, 后出现者覆盖(UPSERT 语义)
     let mut candidates: HashMap<String, UsageEntry> = HashMap::new();
-    for root in ["sessions", "archived_sessions"] {
-        for file in load::discover_files(&base.join(root), "jsonl", MAX_DEPTH) {
-            if file.file_name().and_then(|n| n.to_str()) != Some("updates.jsonl") {
-                continue;
-            }
-            parse_updates(&file, &mut candidates);
-        }
+    let mut progress = Progress::start("grok", load::total_bytes(&files));
+    for file in &files {
+        progress.set_file(load::file_name_str(file));
+        parse_updates(file, &mut progress, &mut candidates);
     }
+    progress.finish();
     Ok(candidates.into_values().collect())
 }
 
-fn parse_updates(file: &Path, candidates: &mut HashMap<String, UsageEntry>) {
+fn parse_updates(
+    file: &Path,
+    progress: &mut Progress,
+    candidates: &mut HashMap<String, UsageEntry>,
+) {
     // 会话 ID = updates.jsonl 的父目录名(UUIDv7, 全局唯一)
     let session_id = file
         .parent()
@@ -50,7 +61,7 @@ fn parse_updates(file: &Path, candidates: &mut HashMap<String, UsageEntry>) {
     // 序号只对有效的用量事件递增(对齐 cc-switch 的 events 下标)
     let mut event_index = 0usize;
     // 文件级读取错误吞掉(原行为); 逐行流式防 GB 级文件整读驻留
-    let _ = load::for_each_jsonl(file, &[], |record| {
+    let _ = load::for_each_jsonl_progress(file, &[], progress, |record| {
         if load::str_get(&record, &["method"]) != Some("_x.ai/session/update") {
             return true;
         }
