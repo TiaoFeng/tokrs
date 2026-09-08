@@ -232,6 +232,30 @@ fn test_sync_skips_unknown_and_empty_models() {
 }
 
 #[test]
+fn test_sync_skips_models_covered_by_prefix() {
+    let dir = std::env::temp_dir().join(format!(
+        "tokrs-pricing-prefix-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let path = dir.join("pricing.json");
+    let mut table = table(r#"{"version":1,"models":{"gpt-5":[{"input":1.0}]}}"#);
+    let entries = vec![
+        // 前缀被 gpt-5 覆盖: 不产生日期版冗余模板, 计价由前缀匹配承担
+        entry("gpt-5.4-2026-01-01", 0, 1, 1),
+        // 完全未覆盖: 照常追加 null 模板
+        entry("brand-new-model", 0, 1, 1),
+    ];
+    assert_eq!(sync_models(&mut table, &path, &entries).unwrap(), 1);
+    assert!(!table.models.contains_key("gpt-5.4-2026-01-01"));
+    assert!(table.models.contains_key("brand-new-model"));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn test_load_missing_file_is_empty_but_corrupted_is_err() {
     let dir = std::env::temp_dir().join(format!(
         "tokrs-pricing-missing-{}-{}",

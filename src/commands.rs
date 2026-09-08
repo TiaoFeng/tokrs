@@ -90,7 +90,7 @@ pub fn run(cli: Cli) -> Result<(), AppError> {
     };
 
     let mut entries = apps::collect(&app_kinds)?;
-    // 价目表: 损坏直接报错不回写; 新模型自动追加 null 模板(用全量模型, 先于日期过滤)
+    // 价目表: 损坏直接报错不回写; 未覆盖模型自动追加 null 模板(用全量模型, 先于日期过滤)
     let pricing_path = apps::prince::pricing_path()?;
     let mut table = apps::prince::load_pricing(&pricing_path)?;
     let added = apps::prince::sync_models(&mut table, &pricing_path, &entries)?;

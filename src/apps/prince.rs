@@ -2,7 +2,8 @@
 //!
 //! 成本解析优先级: force 覆盖(用户显式标记且已填价) > 自报成本 > pricing.json 估价 > unpriced
 //! pricing.json 支持: 同模型时间版本价(since, 本地日期生效), 长上下文/峰时字段级覆盖块
-//! 统计时自动为表中缺失的模型追加全 null 模板(绝不修改已有条目, 跳过 unknown 兜底名);
+//! 统计时自动为表中精确与前缀均未命中的模型追加全 null 模板(绝不修改已有条目,
+//! 跳过 unknown 兜底名);
 //! 文件损坏直接报 Corrupted 退出且不回写, 由用户自行修复
 //!
 use chrono::NaiveDate;
@@ -134,8 +135,10 @@ pub fn load_pricing(path: &Path) -> Result<PricingFile, AppError> {
     Ok(file)
 }
 
-/// 把 entries 中出现但价目表缺失的模型追加为全 null 模板
+/// 把 entries 中出现但价目表精确与前缀均未命中的模型追加为全 null 模板
 ///
+/// 前缀命中的日期变体(如 gpt-5.4 覆盖 gpt-5.4-2026-01-01)不追加模板, 避免冗余;
+/// 用户可手动添加日期版精确 key, find_versions 精确优先, 不会被前缀规则覆盖.
 /// 返回新增数量; 仅当确有新增时才原子回写(临时文件+rename), 已有条目绝不改动
 pub fn sync_models(
     table: &mut PricingFile,
@@ -149,7 +152,7 @@ pub fn sync_models(
         if model.is_empty() || model == "unknown" {
             continue;
         }
-        if !table.models.contains_key(model) {
+        if find_versions(table, model).is_none() {
             table
                 .models
                 .insert(model.to_string(), vec![PricingVersion::default()]);
