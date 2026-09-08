@@ -450,10 +450,17 @@
       },
       {
         "since": "2026-09-18",
-        "input": 0.28,
-        "output": 0.56,
-        "cache_read": 0.056,
-        "cache_write": 0
+        "input": 4.0,
+        "output": 20.0,
+        "cache_read": 0.4,
+        "cache_write": 5,
+        "long_context": {
+          "above": 272000,
+          "input": 8.0,
+          "output": 30,
+          "cache_read": 0.8,
+          "cache_write": 10
+        }
       }
     ],
     "gpt-5.6-terra": [
