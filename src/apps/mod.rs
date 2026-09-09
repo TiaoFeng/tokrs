@@ -9,6 +9,9 @@ pub mod prince;
 
 use crate::error::AppError;
 use crate::model::{AppKind, UsageEntry};
+use serde_json::Value;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 /// 上游 input 含缓存时归一为 fresh input
 ///
@@ -44,6 +47,19 @@ pub fn normalize_model(raw: &str) -> String {
     } else {
         model
     }
+}
+
+/// JSON 值内容哈希(去重键兜底, gemini/pi 共享, 原各解析器本地实现合并于此)
+///
+/// 哈希完整 JSON 值: 任何内容差异(响应文本/额外字段)都各自计数, 不折叠进固定
+/// 键互相覆盖(漏计); 字节级相同的条目(如 fork 逐字节副本)仍去重.
+/// serde_json 默认用 BTreeMap 存对象, 遍历与哈希顺序确定;
+/// DefaultHasher::new() 固定 key(0,0), 单次运行内去重即足够
+/// (本工具全量重扫无状态, 跨进程稳定性非必需), 故用 std 哈希不加 sha2 依赖
+pub fn value_hash(value: &Value) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
 }
 
 pub fn collect(apps: &[AppKind]) -> Result<Vec<UsageEntry>, AppError> {

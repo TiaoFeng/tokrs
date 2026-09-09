@@ -94,14 +94,11 @@ fn parse_message(data: &str, session_id: &str, entries: &mut Vec<UsageEntry>) {
     if load::str_get(&value, &["role"]) != Some("assistant") {
         return;
     }
-    if value
-        .pointer("/tokens")
-        .and_then(Value::as_object)
-        .is_none()
-    {
+    if value.get("tokens").and_then(Value::as_object).is_none() {
         return;
     }
-    if value.pointer("/time/completed").is_none() {
+    // completed 为数字时间戳(ms), 仅做存在性判断(未完成消息跳过)
+    if value.get("time").and_then(|t| t.get("completed")).is_none() {
         return;
     }
 
@@ -126,7 +123,8 @@ fn parse_message(data: &str, session_id: &str, entries: &mut Vec<UsageEntry>) {
     let model =
         load::str_get(&value, &["modelID"]).map_or_else(|| "unknown".to_string(), normalize_model);
     let created_at = value
-        .pointer("/time/created")
+        .get("time")
+        .and_then(|t| t.get("created"))
         .and_then(load::timestamp_to_epoch)
         .unwrap_or_else(load::now_epoch);
 

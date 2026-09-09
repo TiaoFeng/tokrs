@@ -8,12 +8,10 @@
 //!
 use serde_json::Value;
 use std::collections::HashMap;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use crate::{
-    apps::normalize_model,
+    apps::{normalize_model, value_hash},
     error::AppError,
     io::{load, progress::Progress},
     model::{AppKind, UsageEntry},
@@ -130,8 +128,8 @@ fn parse_entry(
         return None;
     }
     let model = if let Some(message) = message.filter(|_| kind == "assistant") {
-        nonempty_str(message, &["responseModel"])
-            .or_else(|| nonempty_str(message, &["model"]))
+        load::str_get_nonempty(message, &["responseModel"])
+            .or_else(|| load::str_get_nonempty(message, &["model"]))
             .map_or_else(|| "unknown".to_string(), normalize_model)
     } else {
         "unknown".to_string()
@@ -148,7 +146,7 @@ fn parse_entry(
         .unwrap_or_else(load::now_epoch);
     let key = match load::str_get(entry, &["id"]).filter(|s| !s.is_empty()) {
         Some(id) => format!("id:{kind}:{id}"),
-        None => format!("hash:{kind}:{}", content_hash(entry)),
+        None => format!("hash:{kind}:{}", value_hash(entry)),
     };
     Some((
         key,
@@ -164,23 +162,6 @@ fn parse_entry(
             self_cost,
         ),
     ))
-}
-
-fn nonempty_str<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
-    load::str_get(value, keys).filter(|s| !s.trim().is_empty())
-}
-
-/// entry.id 缺失时的内容哈希去重
-///
-/// 哈希完整条目 JSON: 任何内容差异都各自计数, 避免 timestamp+usage 相同的
-/// 不同条目被误合并; fork/恢复逐字节复制整条 entry, 哈希不变, 去重不受影响.
-/// serde_json 默认用 BTreeMap 存对象, 序列化与哈希顺序确定;
-/// DefaultHasher::new() 固定 key(0,0), 跨进程结果同样稳定, 只是本工具
-/// 每次全量重扫, 单进程内去重即足够, 故用 std 哈希不加 sha2 依赖
-fn content_hash(entry: &Value) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    entry.hash(&mut hasher);
-    hasher.finish()
 }
 
 #[cfg(test)]

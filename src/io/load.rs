@@ -176,10 +176,34 @@ fn for_each_jsonl_impl(
 
 /// 行是否包含任一 needle(字节级字面量比较)
 fn line_contains(line: &[u8], needles: &[&str]) -> bool {
-    needles.iter().filter(|n| !n.is_empty()).any(|n| {
-        let n = n.as_bytes();
-        line.windows(n.len()).any(|w| w == n)
-    })
+    needles
+        .iter()
+        .filter(|n| !n.is_empty())
+        .any(|n| contains_needle(line, n.as_bytes()))
+}
+
+/// 两字节锚点快扫: 逐位置内联比较 needle 前两字节, 命中锚点才 memcmp 验证全串
+///
+/// 旧实现 `windows().any(w == n)` 对每个字节位置做一次 memcmp 调用, 绝大多数
+/// 位置首字节即失败但调用开销不减; GB 级扫描中该预过滤是热路径. 两字节锚点
+/// 把逐位置开销降为两次内联字节比较(随机文本锚点命中概率 ~1/65536), 预期
+/// 提速 3~8x; needle 前两字节按调用方字面量分布选取(如 codex 的 `"s`/`"t`)
+fn contains_needle(line: &[u8], needle: &[u8]) -> bool {
+    let n = needle.len();
+    if n == 0 || n > line.len() {
+        return false;
+    }
+    if n == 1 {
+        return line.iter().any(|&b| b == needle[0]);
+    }
+    let (a0, a1) = (needle[0], needle[1]);
+    let last = line.len() - n; // 最后一个可尝试起点
+    for i in 0..=last {
+        if line[i] == a0 && line[i + 1] == a1 && &line[i..i + n] == needle {
+            return true;
+        }
+    }
+    false
 }
 
 /// 文件列表总字节(进度条总量; metadata 失败按 0 计)
@@ -239,6 +263,11 @@ pub fn u64_get(value: &Value, keys: &[&str]) -> u64 {
 /// 从 JSON 值按路径取字符串
 pub fn str_get<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
     get_nested(value, keys).and_then(Value::as_str)
+}
+
+/// 从 JSON 值按路径取非空字符串(trim 后非空, 纯空白视为缺失)
+pub fn str_get_nonempty<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
+    str_get(value, keys).filter(|s| !s.trim().is_empty())
 }
 
 /// 从 JSON 值按路径取正成本(USD), 缺失/非正/非数返回 None

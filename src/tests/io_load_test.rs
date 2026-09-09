@@ -104,6 +104,92 @@ fn test_for_each_jsonl_oversized_line_skipped() {
     assert_eq!(rows[0]["ok"], 1);
 }
 
+/// 参考实现(旧 windows 全位置 memcmp 版), 用于等价性对照
+fn reference_contains(line: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty() && line.windows(needle.len()).any(|w| w == needle)
+}
+
+#[test]
+fn test_contains_needle_adversarial_cases() {
+    // 结构化对抗语料: 命中/前缀/后缀/重叠模式/跨界部分命中/needle 长于行
+    let corpus: Vec<Vec<u8>> = vec![
+        b"".to_vec(),
+        b"x".to_vec(),
+        b"hit".to_vec(),
+        b"hitx".to_vec(),
+        b"xhit".to_vec(),
+        b"abababab".to_vec(),
+        b"aaaa".to_vec(),
+        b"prefix-token_count-suffix".to_vec(),
+        b"\"session_meta\"".to_vec(),
+        b"line with \"token\" and \"count\" separately".to_vec(),
+        b"\"token_coun".to_vec(),
+        b"token_count".to_vec(),
+    ];
+    let needles: Vec<&[u8]> = vec![
+        b"token_count",
+        b"\"session_meta\"",
+        b"\"turn_context\"",
+        b"a",
+        b"abab",
+        b"aaaa",
+        b"zzz",
+        b"xhitx",
+        b"tly",
+    ];
+    for line in &corpus {
+        for needle in &needles {
+            assert_eq!(
+                contains_needle(line, needle),
+                reference_contains(line, needle),
+                "line={:?} needle={:?}",
+                String::from_utf8_lossy(line),
+                String::from_utf8_lossy(needle),
+            );
+        }
+    }
+}
+
+#[test]
+fn test_contains_needle_matches_reference_on_random_data() {
+    // 确定性伪随机语料(xorshift 固定种子, 不引 rand 依赖):
+    // 一半用例把 needle 嵌入随机位置保证命中路径覆盖, 两实现须逐例等价
+    let mut state = 0x9E37_79B9_7F4A_7C15u64;
+    let mut rnd = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    for case in 0..300u64 {
+        let line_len = (rnd() % 48) as usize;
+        let needle_len = 1 + (rnd() % 8) as usize;
+        let line: Vec<u8> = (0..line_len).map(|_| (rnd() % 256) as u8).collect();
+        let needle: Vec<u8> = (0..needle_len).map(|_| (rnd() % 256) as u8).collect();
+        let line = if case % 2 == 0 && line_len >= needle_len {
+            let pos = (rnd() as usize) % (line_len - needle_len + 1);
+            let mut embedded = line[..pos].to_vec();
+            embedded.extend_from_slice(&needle);
+            embedded.extend_from_slice(&line[pos..]);
+            embedded
+        } else {
+            line
+        };
+        assert_eq!(
+            contains_needle(&line, &needle),
+            reference_contains(&line, &needle),
+            "case={case} line={line:?} needle={needle:?}"
+        );
+    }
+}
+
+#[test]
+fn test_line_contains_filters_empty_needles() {
+    // 空 needle 被过滤, 不触发 windows(0) 语义
+    assert!(!line_contains(b"anything", &[""]));
+    assert!(line_contains(b"has needle", &["", "needle"]));
+}
+
 #[test]
 #[cfg(unix)]
 fn test_discover_files_skips_fifo() {

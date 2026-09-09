@@ -15,7 +15,7 @@ use crate::{
     apps,
     error::AppError,
     io::cli_print,
-    model::{AppKind, TokenTotals},
+    model::{AppKind, TokenTotals, UsageEntry},
     tokens,
 };
 
@@ -82,21 +82,7 @@ pub fn run(cli: Cli) -> Result<(), AppError> {
     let entries = tokens::filter_by_range(entries, cli.since, cli.until);
     let total = tokens::grand_total(&entries);
     let today = tokens::today_total(&entries);
-
-    let rows: Vec<(String, TokenTotals)> = match cli.by {
-        GroupBy::App => tokens::aggregate_by_app(&entries)
-            .into_iter()
-            .map(|(app, totals)| (app.to_string(), totals))
-            .collect(),
-        GroupBy::Model => tokens::aggregate_by_model(&entries)
-            .into_iter()
-            .map(|((app, model), totals)| (format!("{app}/{model}"), totals))
-            .collect(),
-        GroupBy::Day => tokens::aggregate_by_day(&entries)
-            .into_iter()
-            .map(|(day, totals)| (day.format("%Y-%m-%d").to_string(), totals))
-            .collect(),
-    };
+    let rows = build_rows(&entries, cli.by);
 
     if cli.json {
         cli_print::print_json(&rows, &total, &today);
@@ -105,3 +91,25 @@ pub fn run(cli: Cli) -> Result<(), AppError> {
     }
     Ok(())
 }
+
+/// 按分组维度聚合出报表行(纯函数, 便于单测覆盖分组分发)
+fn build_rows(entries: &[UsageEntry], by: GroupBy) -> Vec<(String, TokenTotals)> {
+    match by {
+        GroupBy::App => tokens::aggregate_by_app(entries)
+            .into_iter()
+            .map(|(app, totals)| (app.to_string(), totals))
+            .collect(),
+        GroupBy::Model => tokens::aggregate_by_model(entries)
+            .into_iter()
+            .map(|((app, model), totals)| (format!("{app}/{model}"), totals))
+            .collect(),
+        GroupBy::Day => tokens::aggregate_by_day(entries)
+            .into_iter()
+            .map(|(day, totals)| (day.format("%Y-%m-%d").to_string(), totals))
+            .collect(),
+    }
+}
+
+#[cfg(test)]
+#[path = "tests/commands_test.rs"]
+mod tests;

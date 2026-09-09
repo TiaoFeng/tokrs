@@ -17,15 +17,10 @@ use serde::de::{
     DeserializeSeed, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor as DeVisitor,
 };
 use serde_json::Value;
-use std::{
-    collections::{HashMap, hash_map::DefaultHasher},
-    fs,
-    hash::{Hash, Hasher},
-    path::Path,
-};
+use std::{collections::HashMap, fs, path::Path};
 
 use crate::{
-    apps::{fresh_input, normalize_model},
+    apps::{fresh_input, normalize_model, value_hash},
     error::{AppError, io_err, json_err},
     io::{load, progress::Progress},
     model::{AppKind, UsageEntry},
@@ -177,7 +172,7 @@ fn parse_message(msg: &Value) -> Option<(String, UsageEntry)> {
     // 字节级相同的消息仍去重
     let msg_key = match load::str_get(msg, &["id"]).filter(|s| !s.is_empty()) {
         Some(id) => id.to_string(),
-        None => format!("hash:{}", content_hash(msg)),
+        None => format!("hash:{}", value_hash(msg)),
     };
     let model =
         load::str_get(msg, &["model"]).map_or_else(|| "unknown".to_string(), normalize_model);
@@ -200,19 +195,6 @@ fn parse_message(msg: &Value) -> Option<(String, UsageEntry)> {
             None,
         ),
     ))
-}
-
-/// msg.id 缺失时的内容哈希兜底(pi 同款)
-///
-/// 哈希完整消息 JSON: 任何内容差异(响应文本/额外字段)都各自计数, 修复固定
-/// "unknown" 键折叠漏计; 字节级相同的消息(含跨文件同 sessionId 副本)仍去重.
-/// serde_json 默认用 BTreeMap 存对象, 序列化与哈希顺序确定;
-/// DefaultHasher::new() 固定 key(0,0), 跨进程结果稳定;
-/// 本工具全量重扫, 单次运行内去重即足够
-fn content_hash(msg: &Value) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    msg.hash(&mut hasher);
-    hasher.finish()
 }
 
 #[cfg(test)]
