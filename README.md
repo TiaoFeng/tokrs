@@ -28,13 +28,15 @@
 
 | App | 数据位置 | 说明 |
 |---|---|---|
-| Claude | `~/.claude/projects/**/*.jsonl` | 按 `message.id` 去重 |
-| Codex | `~/.codex/{sessions/**,archived_sessions/*.jsonl}` | `token_count` 事件；文件内同源快照/紧邻重复判零，fork 回放按父链前缀过滤，archived 同名副本保留最长 |
-| OpenCode | `~/.local/share/opencode/opencode.db` | SQLite 只读访问 |
-| Gemini | `~/.gemini/tmp/*/chats/session-*.json` | 单 JSON 对象，损坏文件跳过 |
+| Claude | `<数据根>/projects/**/*.jsonl`（根可用 `$CLAUDE_CONFIG_DIR` 覆盖，默认 `~/.claude`） | 按 `message.id` 去重 |
+| Codex | `<数据根>/{sessions/**,archived_sessions/*.jsonl}`（根可用 `$CODEX_HOME` 覆盖，默认 `~/.codex`） | `token_count` 事件；文件内同源快照/紧邻重复判零，fork 回放按父链前缀过滤，archived 同名副本保留最长 |
+| OpenCode | `<数据根>/opencode.db`：`$OPENCODE_DB` > `$XDG_DATA_HOME/opencode` > `~/.local/share/opencode`（SQLite 只读访问） | `OPENCODE_DB` 绝对路径直用、相对路径基于数据目录 |
+| Gemini | `~/.gemini/tmp/*/chats/session-*.json` | 单 JSON 对象流式逐消息解析（峰值内存 O(单条消息)），损坏文件警告并跳过 |
 | Grok | `~/.grok/{sessions,archived_sessions}/**/updates.jsonl` | 逐轮 `turn_completed` 面值 |
-| Pi | `~/.pi/agent/sessions/*.jsonl`（可用 `$PI_CODING_AGENT_SESSION_DIR` 覆盖） | 按 entry.id / 内容哈希去重 |
-| Kimi | `~/.kimi-code/sessions/**/agents/*/wire.jsonl` | `usage.record` 每调用面值，model 统一归一化（剥 provider 前缀/小写，全 app 同款），内容签名去重（fork 副本不双算） |
+| Pi | `$PI_CODING_AGENT_SESSION_DIR` > `$PI_CODING_AGENT_DIR/sessions` > `~/.pi/agent/sessions`（旧布局 `~/.pi/sessions` 兜底） | 按 entry.id / 内容哈希去重 |
+| Kimi | `<数据根>/sessions/**/agents/*/wire.jsonl`（根可用 `$KIMI_CODE_HOME` 覆盖，默认 `~/.kimi-code`） | `usage.record` 每调用面值，model 统一归一化（剥 provider 前缀/小写，全 app 同款），内容签名去重（fork 副本不双算） |
+
+> 环境变量路径支持 `~` 前缀展开，须为绝对路径；非法值（如相对路径）会警告并回退默认。
 
 ## 安装
 

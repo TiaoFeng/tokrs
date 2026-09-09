@@ -28,14 +28,15 @@ A native token usage statistics CLI written in Rust. It directly reads the log a
 
 | App | Data Location | Description |
 |---|---|---|
-| Claude | `~/.claude/projects/**/*.jsonl` | Dedupe by `message.id` |
-| Codex | `~/.codex/{sessions/**,archived_sessions/*.jsonl}` | `token_count` events; in-file same-source/adjacent snapshot repeats zeroed, fork replays filtered via parent-chain prefix match, same-name archived copies deduplicated (longest wins) |
-| OpenCode | `~/.local/share/opencode/opencode.db` | Read-only access to SQLite |
-| Gemini | `~/.gemini/tmp/*/chats/session-*.json` | Single JSON object; skip corrupted files |
+| Claude | `<root>/projects/**/*.jsonl` (root overridable via `$CLAUDE_CONFIG_DIR`, default `~/.claude`) | Dedupe by `message.id` |
+| Codex | `<root>/{sessions/**,archived_sessions/*.jsonl}` (root overridable via `$CODEX_HOME`, default `~/.codex`) | `token_count` events; in-file same-source/adjacent snapshot repeats zeroed, fork replays filtered via parent-chain prefix match, same-name archived copies deduplicated (longest wins) |
+| OpenCode | `<root>/opencode.db`: `$OPENCODE_DB` > `$XDG_DATA_HOME/opencode` > `~/.local/share/opencode` (read-only access to SQLite) | `OPENCODE_DB` accepts an absolute path directly; relative paths resolve against the data directory |
+| Gemini | `~/.gemini/tmp/*/chats/session-*.json` | Single JSON object, streamed message-by-message (peak memory O(one message)); corrupted files are warned and skipped |
 | Grok | `~/.grok/{sessions,archived_sessions}/**/updates.jsonl` | Check `turn_completed` value per round |
-| Pi | `~/.pi/agent/sessions/*.jsonl` (can be overridden with `$PI_CODING_AGENT_SESSION_DIR`) | Deduped by `entry.id` / content hash |
-| Kimi | `~/.kimi-code/sessions/**/agents/*/wire.jsonl` | `usage.record`: For each call, models are normalized uniformly (provider prefix stripped, lowercased; same for all apps), and duplicates are removed from the content signatures (fork copies are not counted twice) |
+| Pi | `$PI_CODING_AGENT_SESSION_DIR` > `$PI_CODING_AGENT_DIR/sessions` > `~/.pi/agent/sessions` (legacy `~/.pi/sessions` as fallback) | Deduped by `entry.id` / content hash |
+| Kimi | `<root>/sessions/**/agents/*/wire.jsonl` (root overridable via `$KIMI_CODE_HOME`, default `~/.kimi-code`) | `usage.record`: For each call, models are normalized uniformly (provider prefix stripped, lowercased; same for all apps), and duplicates are removed from the content signatures (fork copies are not counted twice) |
 
+> Environment variable paths support `~` prefix expansion and must be absolute; invalid values (e.g. relative paths) produce a warning and fall back to the default.
 
 ## Installation
 
