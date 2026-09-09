@@ -132,6 +132,9 @@ pub fn for_each_jsonl_progress(
 /// 文件可达 GB 级, 禁止整读驻留: 逐行解析、处理完即释放, 峰值内存 O(单行)。
 /// - 行含任一 needle 字节串才解析回调, 否则零分配跳过(空 needles 全放行);
 ///   needle 须为不含转义的 ASCII 字面量(如 "\"token_count\"")
+/// - needle 过滤自首条成功解析的行之后生效: 首条有效 JSON 行总是回调
+///   (pi 的 session header 校验、claude 的 sessionId 兜底依赖真实首行;
+///   其余解析器对首行回调为无副作用 no-op)
 /// - 行超过 max_line 整行跳过并每文件警告一次, 继续消费到换行为止
 /// - 畸形行/无效 UTF-8 行跳过(from_slice 语义与整读版逐字一致, 含 CRLF/末行无换行)
 /// - 文件打开/读失败返回 Err; 回调返回 false 提前终止
@@ -146,6 +149,8 @@ fn for_each_jsonl_impl(
     let mut reader = BufReader::with_capacity(64 * 1024, file);
     let mut line: Vec<u8> = Vec::new();
     let mut warned = false;
+    // needle 过滤门闩: 首条成功解析的行之前不过滤(见函数文档)
+    let mut parsed_any = false;
     loop {
         line.clear();
         let mut oversized = false;
@@ -204,13 +209,14 @@ fn for_each_jsonl_impl(
             }
             continue;
         }
-        if !needles.is_empty() && !line_contains(&line, needles) {
+        if parsed_any && !needles.is_empty() && !line_contains(&line, needles) {
             continue;
         }
-        if let Ok(value) = serde_json::from_slice::<Value>(&line)
-            && !on_line(value)
-        {
-            return Ok(());
+        if let Ok(value) = serde_json::from_slice::<Value>(&line) {
+            parsed_any = true;
+            if !on_line(value) {
+                return Ok(());
+            }
         }
     }
 }

@@ -21,6 +21,11 @@ use crate::{
 
 const MAX_DEPTH: usize = 4;
 
+/// 行级预过滤 needle: 只解析 session/update 事件(method 定值 ASCII 不含转义),
+/// 其余零分配跳过(对齐 codex 同款机制); 不用 "turn_completed"——
+/// sessionUpdate 缺失的行须向后兼容放行, 不能被过滤掉
+const GROK_LINE_NEEDLES: [&str; 1] = ["\"_x.ai/session/update\""];
+
 pub fn collect(threads: Option<usize>) -> Result<Vec<UsageEntry>, AppError> {
     let base = load::home_dir()?.join(".grok");
     if !base.is_dir() {
@@ -73,7 +78,7 @@ fn parse_updates(file: &Path, progress: &Progress) -> HashMap<String, UsageEntry
     // 序号只对有效的用量事件递增(对齐 cc-switch 的 events 下标)
     let mut event_index = 0usize;
     // 单文件读取失败警告+err 计数后跳过(不中止全局); 逐行流式防 GB 级文件整读驻留
-    if let Err(e) = load::for_each_jsonl_progress(file, &[], progress, |record| {
+    if let Err(e) = load::for_each_jsonl_progress(file, &GROK_LINE_NEEDLES, progress, |record| {
         if load::str_get(&record, &["method"]) != Some("_x.ai/session/update") {
             return true;
         }

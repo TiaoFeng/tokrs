@@ -27,6 +27,10 @@ use crate::{
 
 const MAX_DEPTH: usize = 5;
 
+/// 行级预过滤 needle: wire.jsonl 绝大多数行是 llm.request 等其它事件, 只解析
+/// 用量记录(type 定值 ASCII 不含转义), 其余零分配跳过(对齐 codex 同款机制)
+const KIMI_LINE_NEEDLES: [&str; 1] = ["\"usage.record\""];
+
 /// kimi 数据根(官方 KIMI_CODE_HOME > ~/.kimi-code, 会话/日志等随根迁移);
 /// 环境变量经 load::env_abs_path 归一(~/ 展开, 非绝对警告后回退默认)
 fn kimi_base(home: &Path, env: Option<&OsStr>) -> PathBuf {
@@ -87,7 +91,7 @@ fn parse_wire(file: &Path, progress: &Progress) -> HashMap<String, UsageEntry> {
             .map(str::to_string)
     });
     // 单文件读取失败警告+err 计数后跳过(不中止全局); 逐行流式防 GB 级文件整读驻留
-    if let Err(e) = load::for_each_jsonl_progress(file, &[], progress, |record| {
+    if let Err(e) = load::for_each_jsonl_progress(file, &KIMI_LINE_NEEDLES, progress, |record| {
         if load::str_get(&record, &["type"]) != Some("usage.record") {
             return true;
         }

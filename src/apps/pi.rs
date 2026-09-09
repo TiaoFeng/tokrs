@@ -22,6 +22,11 @@ use crate::{
 
 const MAX_DEPTH: usize = 4;
 
+/// 行级预过滤 needle: 候选条目(assistant/toolResult 消息与 compaction/
+/// branch_summary)必含 usage 对象, 其余零分配跳过(对齐 codex 同款机制);
+/// session header 不含 usage, 由 load 的首行不过滤规则保障 header 校验语义
+const PI_LINE_NEEDLES: [&str; 1] = ["\"usage\""];
+
 /// pi 会话根目录链(环境变量经 load::env_abs_path 归一, ~/ 展开, 非绝对警告回退):
 /// PI_CODING_AGENT_SESSION_DIR > $PI_CODING_AGENT_DIR/sessions > ~/.pi/agent/sessions;
 /// ~/.pi/sessions 为旧布局兜底(tokrs 保留, cc-switch 无此层); 多根重叠由
@@ -99,7 +104,7 @@ fn parse_session(file: &Path, progress: &Progress) -> HashMap<String, UsageEntry
     // 首条有效 JSON 必须是 session header(畸形行已被流式过滤, 对齐参考实现);
     // 首条非 header 则整文件跳过(回调返回 false 提前终止)。
     // 单文件读取失败警告+err 计数后跳过(不中止全局); 逐行流式防 GB 级文件整读驻留
-    if let Err(e) = load::for_each_jsonl_progress(file, &[], progress, |entry| {
+    if let Err(e) = load::for_each_jsonl_progress(file, &PI_LINE_NEEDLES, progress, |entry| {
         if !first_seen {
             first_seen = true;
             if load::str_get(&entry, &["type"]) != Some("session") {

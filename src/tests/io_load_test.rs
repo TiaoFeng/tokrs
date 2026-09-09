@@ -67,10 +67,11 @@ fn test_for_each_jsonl_early_stop_and_needles() {
     let path = temp_dir("needles").join("f.jsonl");
     fs::write(
         &path,
-        "{\"t\":\"x\"}\n{\"k\":\"hit\"}\n{\"t\":\"y\"}\n{\"k\":\"hit2\"}",
+        "{\"k\":\"hit\"}\n{\"t\":\"y\"}\n{\"k\":\"hit2\"}\n{\"t\":\"z\"}",
     )
     .unwrap();
-    // needle 预过滤: 不含字面量的行零解析跳过("hit2" 不含 "hit"——缺收尾引号)
+    // needle 预过滤: 首条有效行解析(本就含 needle), 其后不含字面量的行零解析
+    // 跳过("hit2" 不含 "hit"——缺收尾引号)
     let mut hits = Vec::new();
     for_each_jsonl_impl(&path, &["\"hit\""], MAX_LINE_BYTES, None, |v| {
         hits.push(v);
@@ -87,6 +88,39 @@ fn test_for_each_jsonl_early_stop_and_needles() {
     })
     .unwrap();
     assert_eq!(stopped.len(), 1);
+}
+
+#[test]
+fn test_for_each_jsonl_needles_pass_first_valid_line() {
+    // 首条有效 JSON 行不受 needle 过滤(pi header 校验/claude sessionId 兜底
+    // 依赖真实首行); 其后不含 needle 的行零解析跳过
+    let path = temp_dir("needle_first").join("f.jsonl");
+    fs::write(
+        &path,
+        "{\"type\":\"header\"}\n{\"x\":1}\n{\"k\":\"hit\"}\n{\"y\":2}",
+    )
+    .unwrap();
+    let mut rows = Vec::new();
+    for_each_jsonl_impl(&path, &["\"hit\""], MAX_LINE_BYTES, None, |v| {
+        rows.push(v);
+        true
+    })
+    .unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["type"], "header");
+    assert_eq!(rows[1]["k"], "hit");
+    // 畸形行不翻转门闩: bypass 持续到首条"有效" JSON 行(而非仅物理首行)
+    let path2 = temp_dir("needle_first_bad").join("f.jsonl");
+    fs::write(&path2, "not-json\n{\"type\":\"header\"}\n{\"k\":\"hit\"}").unwrap();
+    let mut rows2 = Vec::new();
+    for_each_jsonl_impl(&path2, &["\"hit\""], MAX_LINE_BYTES, None, |v| {
+        rows2.push(v);
+        true
+    })
+    .unwrap();
+    assert_eq!(rows2.len(), 2);
+    assert_eq!(rows2[0]["type"], "header");
+    assert_eq!(rows2[1]["k"], "hit");
 }
 
 #[test]
