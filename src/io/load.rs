@@ -2,17 +2,19 @@
 //!
 //! 日志文件可达 GB 级: 所有读取均为流式(逐行/逐块), 峰值内存 O(单行),
 //! 修改原本的读取逻辑(整读 + DOM 驻留会耗尽内存)
+//! 单文件失败统一 warn_file 警告后跳过(不中止全局); 单对象文件(如 gemini
+//! session)经 ProgressReader + serde Visitor 流式逐条解析(峰值 O(单条消息))
 //!
 use serde_json::Value;
 use std::{
     fs,
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use super::progress::Progress;
-use crate::error::{AppError, io_err, json_err};
+use crate::error::{AppError, io_err};
 
 /// 返回用户home地址
 pub fn home_dir() -> Result<PathBuf, AppError> {
@@ -193,11 +195,35 @@ pub fn file_name_str(path: &Path) -> &str {
     path.file_name().and_then(|n| n.to_str()).unwrap_or("")
 }
 
-/// 读取单个 JSON 对象文件（非 JSONL，如 gemini 的 session 文件）; 流式解析避免整读双缓冲
-/// (打开/读错误经 serde 统一包装为 Corrupted, 调用方按整体失败处理)
-pub fn read_json(path: &Path) -> Result<Value, AppError> {
-    let file = fs::File::open(path).map_err(|e| io_err("open", path, e))?;
-    serde_json::from_reader(file).map_err(|e| json_err(path, e))
+/// 单文件失败统一警告(stderr 单行, AppError Display 自带操作与路径上下文)
+///
+/// 各 app 的单文件读取/解析失败一律警告后跳过继续, 不中止全局统计;
+/// 全局性错误(home 解析失败/pricing.json 损坏)仍硬退出
+pub fn warn_file(err: &AppError) {
+    eprintln!("> {err}");
+}
+
+/// 进度感知 reader: 每读到一段字节即向 progress 上报
+///
+/// 用于无法逐行流式的单一对象文件(如 gemini 的 session JSON):
+/// 配合 serde_json Deserializer::from_reader(IoRead 真流式)实现字节驱动进度
+pub struct ProgressReader<'a, R: Read> {
+    inner: R,
+    progress: &'a mut Progress,
+}
+
+impl<'a, R: Read> ProgressReader<'a, R> {
+    pub fn new(inner: R, progress: &'a mut Progress) -> ProgressReader<'a, R> {
+        ProgressReader { inner, progress }
+    }
+}
+
+impl<R: Read> Read for ProgressReader<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.progress.add(n as u64);
+        Ok(n)
+    }
 }
 
 /// 从 JSON 值按路径取 u64，缺失或类型不符返回 0

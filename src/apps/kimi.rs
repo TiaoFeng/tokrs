@@ -60,8 +60,8 @@ fn parse_wire(file: &Path, progress: &mut Progress, candidates: &mut HashMap<Str
             .filter(|n| n.starts_with("session_"))
             .map(str::to_string)
     });
-    // 文件级读取错误吞掉(原行为); 逐行流式防 GB 级文件整读驻留
-    let _ = load::for_each_jsonl_progress(file, &[], progress, |record| {
+    // 单文件读取失败警告后跳过(不中止全局); 逐行流式防 GB 级文件整读驻留
+    if let Err(e) = load::for_each_jsonl_progress(file, &[], progress, |record| {
         if load::str_get(&record, &["type"]) != Some("usage.record") {
             return true;
         }
@@ -117,7 +117,9 @@ fn parse_wire(file: &Path, progress: &mut Progress, candidates: &mut HashMap<Str
             Entry::Occupied(_) => {}
         }
         true
-    });
+    }) {
+        load::warn_file(&e);
+    }
 }
 
 #[cfg(test)]

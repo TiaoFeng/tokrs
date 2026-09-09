@@ -210,6 +210,91 @@ fn test_missing_base_returns_empty() {
 }
 
 #[test]
+fn test_messages_before_session_id() {
+    let base = temp_dir();
+    // 键序不假设: messages 在 sessionId 之前出现仍生效
+    let doc = format!(
+        r#"{{"startTime":"2026-09-01T09:00:00Z","messages":[{}],"sessionId":"s-late"}}"#,
+        gemini_msg("m1", "x", 1, 1, 0, 0)
+    );
+    write_session(&base, "p", "session-1.json", &doc);
+    let entries = collect_from(&base).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].session_id.as_deref(), Some("s-late"));
+    fs::remove_dir_all(&base).ok();
+}
+
+#[test]
+fn test_truncated_file_contributes_nothing() {
+    let base = temp_dir();
+    let doc = session_json(
+        "s",
+        &[
+            gemini_msg("m1", "x", 1, 1, 0, 0),
+            gemini_msg("m2", "x", 2, 2, 0, 0),
+        ],
+    );
+    write_session(&base, "p", "session-trunc.json", &doc[..doc.len() / 2]);
+    write_session(
+        &base,
+        "p",
+        "session-ok.json",
+        &session_json("s", &[gemini_msg("m3", "x", 3, 3, 0, 0)]),
+    );
+    // 截断文件警告后整体不计(staging 丢弃), 其余文件仍解析
+    let entries = collect_from(&base).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].input_tokens, 3);
+    fs::remove_dir_all(&base).ok();
+}
+
+#[test]
+fn test_many_messages_streamed() {
+    let base = temp_dir();
+    let mut messages = Vec::new();
+    for i in 0..300 {
+        if i % 2 == 0 {
+            messages.push(gemini_msg(
+                &format!("m{i}"),
+                "gemini-2.5-pro",
+                i as u64,
+                1,
+                0,
+                0,
+            ));
+        } else {
+            messages.push(r#"{"id":"u","type":"user"}"#.to_string());
+        }
+    }
+    write_session(
+        &base,
+        "p",
+        "session-big.json",
+        &session_json("s", &messages),
+    );
+    let entries = collect_from(&base).unwrap();
+    // 150 条 gemini 消息逐条瞬态入账, user 消息过滤
+    assert_eq!(entries.len(), 150);
+    fs::remove_dir_all(&base).ok();
+}
+
+#[test]
+fn test_non_object_and_null_messages_skipped() {
+    let base = temp_dir();
+    // 合法 JSON 但顶层非对象; messages 为 null(非数组)
+    write_session(&base, "p", "session-arr.json", "[]");
+    write_session(
+        &base,
+        "p",
+        "session-null.json",
+        r#"{"sessionId":"s","messages":null}"#,
+    );
+    let entries = collect_from(&base).unwrap();
+    assert!(entries.is_empty());
+    fs::remove_dir_all(&base).ok();
+}
+
+#[test]
 fn test_model_normalization() {
     let base = temp_dir();
     write_session(

@@ -97,6 +97,31 @@ fn collect_at(base: &Path) -> Vec<UsageEntry> {
 }
 
 #[test]
+#[cfg(unix)]
+fn test_unreadable_file_warns_and_continues() {
+    use std::os::unix::fs::PermissionsExt;
+    let base = temp_base();
+    write_rollout(
+        &base,
+        "sessions/2026/09/04/rollout-11111111-2222-3333-4444-555555555555.jsonl",
+        &[
+            meta_line(),
+            token_count_line("2026-09-04T06:00:00Z", None, Some((100, 50, 0, 10)), None),
+        ],
+    );
+    let bad = base.join("archived_sessions").join("rollout-broken.jsonl");
+    fs::write(&bad, "{}").unwrap();
+    let mut perms = fs::metadata(&bad).unwrap().permissions();
+    perms.set_mode(0o000);
+    fs::set_permissions(&bad, perms).unwrap();
+    // 单文件不可读: 警告后跳过, 其余文件仍解析(依赖非 root 环境, CI 为非 root runner)
+    let entries = collect_at(&base);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].input_tokens, 50);
+    fs::remove_dir_all(&base).ok();
+}
+
+#[test]
 fn test_last_token_usage_wins_and_duplicates_skipped() {
     let base = temp_base();
     write_rollout(

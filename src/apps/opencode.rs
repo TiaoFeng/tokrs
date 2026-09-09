@@ -27,25 +27,43 @@ pub fn collect_from(db_path: &Path) -> Result<Vec<UsageEntry>, AppError> {
     }
     // 无文件字节流可推进(SQLite 单查询), 仅 TTY 起止提示
     progress::stderr_note(&format!("opencode: scanning {}", db_path.display()));
-    let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(|e| sqlite_err(db_path, e))?;
-    let mut stmt = conn
-        .prepare("SELECT session_id, id, data FROM message")
-        .map_err(|e| sqlite_err(db_path, e))?;
-    let rows = stmt
-        .query_map([], |row| {
+    // 单 DB 源不可用: 警告后返回空(与其余 app 的单文件失败策略一致), 不中止全局
+    let Some(conn) = warn_sqlite(
+        Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| sqlite_err(db_path, e)),
+    ) else {
+        return Ok(Vec::new());
+    };
+    let Some(mut stmt) = warn_sqlite(
+        conn.prepare("SELECT session_id, id, data FROM message")
+            .map_err(|e| sqlite_err(db_path, e)),
+    ) else {
+        return Ok(Vec::new());
+    };
+    let Some(rows) = warn_sqlite(
+        stmt.query_map([], |row| {
             Ok((
                 row.get::<_, Option<String>>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
             ))
         })
-        .map_err(|e| sqlite_err(db_path, e))?;
+        .map_err(|e| sqlite_err(db_path, e)),
+    ) else {
+        return Ok(Vec::new());
+    };
 
     let mut seen: HashSet<String> = HashSet::new();
     let mut entries = Vec::new();
     for row in rows {
-        let (session_id, message_id, data) = row.map_err(|e| sqlite_err(db_path, e))?;
+        let (session_id, message_id, data) = match row {
+            Ok(row) => row,
+            Err(e) => {
+                // 行级失败: 警告后保留已收集条目
+                load::warn_file(&sqlite_err(db_path, e));
+                break;
+            }
+        };
         let Some(session_id) = session_id else {
             continue;
         };
@@ -56,6 +74,17 @@ pub fn collect_from(db_path: &Path) -> Result<Vec<UsageEntry>, AppError> {
     }
     progress::stderr_note("opencode: done");
     Ok(entries)
+}
+
+/// sqlite 步骤失败统一警告; 调用方按"该源空结果"继续, 不中止全局
+fn warn_sqlite<T>(result: Result<T, AppError>) -> Option<T> {
+    match result {
+        Ok(value) => Some(value),
+        Err(e) => {
+            load::warn_file(&e);
+            None
+        }
+    }
 }
 
 fn parse_message(data: &str, session_id: &str, entries: &mut Vec<UsageEntry>) {

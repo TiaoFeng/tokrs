@@ -1,5 +1,6 @@
 use super::*;
 use std::fs;
+use std::io::Cursor;
 
 fn temp_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
@@ -123,14 +124,13 @@ fn test_discover_files_skips_fifo() {
 }
 
 #[test]
-fn test_read_json_ok_and_corrupted() {
-    let dir = temp_dir("readjson");
-    let ok = dir.join("a.json");
-    fs::write(&ok, "{\"x\":1}").unwrap();
-    assert_eq!(read_json(&ok).unwrap()["x"], 1);
-    let bad = dir.join("b.json");
-    fs::write(&bad, "{oops").unwrap();
-    assert!(matches!(read_json(&bad), Err(AppError::Corrupted { .. })));
+fn test_progress_reader_forwards_content() {
+    // ProgressReader: 透传内容并逐块向进度条上报字节(非 TTY 下 Progress 静默)
+    let mut progress = Progress::start("test", 5);
+    let mut reader = ProgressReader::new(Cursor::new("hello"), &mut progress);
+    let mut out = String::new();
+    reader.read_to_string(&mut out).unwrap();
+    assert_eq!(out, "hello");
 }
 
 #[test]

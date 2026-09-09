@@ -28,23 +28,21 @@ pub fn collect_from(base: &Path) -> Result<Vec<UsageEntry>, AppError> {
     let files = load::discover_files(base, "jsonl", MAX_DEPTH);
     let mut progress = Progress::start("claude", load::total_bytes(&files));
     // 流式逐行: 文件可达 GB 级, 整读驻留会耗尽内存;
-    // 错误路径先收尾进度条再传播, 避免半截进度条污染错误输出
-    let outcome: Result<(), AppError> = (|| {
-        for file in &files {
-            progress.set_file(load::file_name_str(file));
-            let mut session_fallback: Option<String> = None;
-            load::for_each_jsonl_progress(file, &[], &mut progress, |value| {
-                if session_fallback.is_none() {
-                    session_fallback = load::str_get(&value, &["sessionId"]).map(str::to_string);
-                }
-                parse_assistant_line(&value, session_fallback.as_deref(), &mut candidates);
-                true
-            })?;
+    // 单文件读取失败警告后跳过, 不中止全局统计
+    for file in &files {
+        progress.set_file(load::file_name_str(file));
+        let mut session_fallback: Option<String> = None;
+        if let Err(e) = load::for_each_jsonl_progress(file, &[], &mut progress, |value| {
+            if session_fallback.is_none() {
+                session_fallback = load::str_get(&value, &["sessionId"]).map(str::to_string);
+            }
+            parse_assistant_line(&value, session_fallback.as_deref(), &mut candidates);
+            true
+        }) {
+            load::warn_file(&e);
         }
-        Ok(())
-    })();
+    }
     progress.finish();
-    outcome?;
     Ok(candidates.into_values().map(|c| c.entry).collect())
 }
 

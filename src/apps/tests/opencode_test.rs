@@ -108,6 +108,22 @@ fn test_missing_db_returns_empty() {
 }
 
 #[test]
+fn test_corrupted_db_warns_and_empty() {
+    let path = std::env::temp_dir().join(format!(
+        "tokrs-opencode-corrupt-{}-{}.db",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::write(&path, "not a sqlite db").unwrap();
+    // DB 损坏: 警告后返回空结果, 不再 Err 中止全局
+    assert!(collect_from(&path).unwrap().is_empty());
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn test_model_normalization() {
     let conn = temp_db();
     conn.execute(

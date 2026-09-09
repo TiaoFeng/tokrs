@@ -60,8 +60,8 @@ fn parse_updates(
         .unwrap_or("unknown");
     // 序号只对有效的用量事件递增(对齐 cc-switch 的 events 下标)
     let mut event_index = 0usize;
-    // 文件级读取错误吞掉(原行为); 逐行流式防 GB 级文件整读驻留
-    let _ = load::for_each_jsonl_progress(file, &[], progress, |record| {
+    // 单文件读取失败警告后跳过(不中止全局); 逐行流式防 GB 级文件整读驻留
+    if let Err(e) = load::for_each_jsonl_progress(file, &[], progress, |record| {
         if load::str_get(&record, &["method"]) != Some("_x.ai/session/update") {
             return true;
         }
@@ -122,7 +122,9 @@ fn parse_updates(
             );
         }
         true
-    });
+    }) {
+        load::warn_file(&e);
+    }
 }
 
 /// 逐模型面值用量; 缺 modelUsage 时回退顶层 usage 且模型名未知

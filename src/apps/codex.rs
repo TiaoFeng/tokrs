@@ -74,18 +74,17 @@ pub fn collect_from(base: &Path) -> Result<Vec<UsageEntry>, AppError> {
 
     // Pass 1: 逐文件解析 meta 与 token 事件(文件内去重与 delta 计算在此完成);
     // 进度条覆盖本 pass(emit 为纯内存, 瞬时);
-    // 错误路径先收尾进度条再传播, 避免半截进度条污染错误输出
+    // 单文件读取失败警告后跳过, 不中止全局统计
     let mut parsed: Vec<ParsedFile> = Vec::with_capacity(files.len());
     let mut progress = Progress::start("codex", load::total_bytes(&files));
-    let outcome: Result<(), AppError> = (|| {
-        for file in &files {
-            progress.set_file(load::file_name_str(file));
-            parsed.push(parse_file(file, &mut progress)?);
+    for file in &files {
+        progress.set_file(load::file_name_str(file));
+        match parse_file(file, &mut progress) {
+            Ok(parsed_file) => parsed.push(parsed_file),
+            Err(e) => load::warn_file(&e),
         }
-        Ok(())
-    })();
+    }
     progress.finish();
-    outcome?;
 
     // Pass 2: 以文件名 uuid 汇总父时间线, fork 回放段跳过后入账
     let timelines = build_timelines(&parsed);

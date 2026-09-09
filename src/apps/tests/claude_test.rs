@@ -114,3 +114,24 @@ fn test_model_normalization() {
     assert_eq!(entries[0].model, "claude-sonnet-4-5");
     fs::remove_dir_all(&base).ok();
 }
+
+#[test]
+#[cfg(unix)]
+fn test_unreadable_file_warns_and_continues() {
+    use std::os::unix::fs::PermissionsExt;
+    let base = temp_dir();
+    write_session(
+        &base,
+        "session.jsonl",
+        &[assistant_line("m1", 5, Some("end_turn"))],
+    );
+    let bad = base.join("proj-hash").join("broken.jsonl");
+    fs::write(&bad, "{}").unwrap();
+    let mut perms = fs::metadata(&bad).unwrap().permissions();
+    perms.set_mode(0o000);
+    fs::set_permissions(&bad, perms).unwrap();
+    // 单文件不可读: 警告后跳过, 其余文件仍解析(依赖非 root 环境, CI 为非 root runner)
+    let entries = collect_from(&base).unwrap();
+    assert_eq!(entries.len(), 1);
+    fs::remove_dir_all(&base).ok();
+}

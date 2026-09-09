@@ -2,20 +2,31 @@
 //!
 //! 数据源: ~/.gemini/tmp/<project>/chats/session-*.json
 //! 每个文件是单个 JSON 对象(非 JSONL), 含 messages 数组
+//!
+//! 流式解析: serde_json Deserializer::from_reader(IoRead 逐块) + 自定义 Visitor,
+//! messages 数组逐条取出瞬态处理(峰值内存 O(单条消息), 不整读 DOM, 文件可达任意大),
+//! 其余字段 IgnoredAny 跳过; ProgressReader 逐块上报字节保持进度条字节驱动
+//! sessionId 与 messages 的键序不假设: 先文件内 staging(HashMap<msg_key, entry>),
+//! 流读完统一补 session_id 并拼前缀入全局表, 去重语义与整读版逐字一致
 //! 只统计 type=="gemini" 的消息; thoughts 并入 output; input 含 cached 已扣除归一
 //! 按消息 id last-wins 去重(缺 id 用内容哈希兜底, pi 同款)
+//! 损坏/不可读文件: 警告并整体不计(staging 丢弃), 不中断其它文件
 //! 参考: cc-switch session_usage_gemini.rs
 //!
+use serde::de::{
+    DeserializeSeed, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor as DeVisitor,
+};
 use serde_json::Value;
 use std::{
     collections::{HashMap, hash_map::DefaultHasher},
+    fs,
     hash::{Hash, Hasher},
     path::Path,
 };
 
 use crate::{
     apps::{fresh_input, normalize_model},
-    error::AppError,
+    error::{AppError, io_err, json_err},
     io::{load, progress::Progress},
     model::{AppKind, UsageEntry},
 };
@@ -31,81 +42,164 @@ pub fn collect() -> Result<Vec<UsageEntry>, AppError> {
 }
 
 pub fn collect_from(base: &Path) -> Result<Vec<UsageEntry>, AppError> {
-    // 去重键: 消息 id, 后出现者覆盖(对应 cc-switch 的 UPSERT 语义)
+    // 全局去重键: session_id:msg_key(后出现者覆盖, 对应 cc-switch 的 UPSERT 语义)
     let mut candidates: HashMap<String, UsageEntry> = HashMap::new();
     let mut files = Vec::new();
     for file in load::discover_files(base, "json", MAX_DEPTH) {
-        let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if !name.starts_with("session-") || !name.ends_with(".json") {
-            continue;
+        let name = load::file_name_str(&file);
+        if name.starts_with("session-") && name.ends_with(".json") {
+            files.push(file);
         }
-        files.push(file);
     }
     let mut progress = Progress::start("gemini", load::total_bytes(&files));
     for file in &files {
         progress.set_file(load::file_name_str(file));
-        // 单 JSON 对象(非 JSONL): 粒度粗一档, 每读完一个文件按其大小推进
-        let size = std::fs::metadata(file).map(|m| m.len()).unwrap_or(0);
-        let result = load::read_json(file);
-        progress.add(size);
-        // 单个文件损坏不中断整体收集
-        if let Ok(value) = result {
-            parse_session(&value, &mut candidates);
+        // 单个文件损坏/不可读警告后跳过, 不中断整体收集(staging 随之丢弃, 整体不计)
+        if let Err(e) = stream_session(file, &mut progress, &mut candidates) {
+            load::warn_file(&e);
         }
     }
     progress.finish();
     Ok(candidates.into_values().collect())
 }
 
-fn parse_session(value: &Value, candidates: &mut HashMap<String, UsageEntry>) {
-    let session_id = load::str_get(value, &["sessionId"]).map(str::to_string);
-    let Some(messages) = value.get("messages").and_then(Value::as_array) else {
-        return;
-    };
-    for msg in messages {
-        if load::str_get(msg, &["type"]) != Some("gemini") {
-            continue;
-        }
-        let input = load::u64_get(msg, &["tokens", "input"]);
-        let output = load::u64_get(msg, &["tokens", "output"]);
-        let cached = load::u64_get(msg, &["tokens", "cached"]);
-        let thoughts = load::u64_get(msg, &["tokens", "thoughts"]);
-        // 任一 token>0 才导入(纯缓存命中也保留)
-        if input == 0 && output == 0 && cached == 0 && thoughts == 0 {
-            continue;
-        }
-        // gemini 的 input 含 cached, 归一为 fresh input
-        let input = fresh_input(input, cached, 0);
-        // 去重键: sessionId:msg.id(同 id last-wins, 对应 cc-switch 的 UPSERT 语义);
-        // 缺 id 用完整消息内容哈希兜底(pi 同款): 任何内容差异都各自计数,
-        // 不折叠进固定 "unknown" 键互相覆盖(漏计), 字节级相同的消息仍去重
-        let msg_key = match load::str_get(msg, &["id"]).filter(|s| !s.is_empty()) {
-            Some(id) => id.to_string(),
-            None => format!("hash:{}", content_hash(msg)),
-        };
-        let dedup_key = format!("{}:{msg_key}", session_id.as_deref().unwrap_or("unknown"));
-        let model =
-            load::str_get(msg, &["model"]).map_or_else(|| "unknown".to_string(), normalize_model);
-        let created_at = msg
-            .get("timestamp")
-            .and_then(load::timestamp_to_epoch)
-            .unwrap_or_else(load::now_epoch);
-        // gemini 无自报成本, 待定价表估价; 思考 token 按输出计费, 并入 output
-        candidates.insert(
-            dedup_key,
-            UsageEntry::new(
-                AppKind::Gemini,
-                model,
-                session_id.clone(),
-                created_at,
-                input,
-                output + thoughts,
-                cached,
-                0,
-                None,
-            ),
-        );
+/// 流式解析单个 session 文件: 顶层对象逐 key 消费, messages 数组逐条瞬态处理
+///
+/// 文件内 staging 解决键序问题: messages 先于 sessionId 出现时逐条消息尚不知道
+/// session_id, 故先按 msg_key 收集, 流读完统一拼 `{session_id}:` 前缀入全局表
+fn stream_session(
+    file: &Path,
+    progress: &mut Progress,
+    candidates: &mut HashMap<String, UsageEntry>,
+) -> Result<(), AppError> {
+    let f = fs::File::open(file).map_err(|e| io_err("open", file, e))?;
+    let reader = load::ProgressReader::new(std::io::BufReader::new(f), progress);
+    let mut de = serde_json::Deserializer::from_reader(reader);
+    let mut session_id: Option<String> = None;
+    let mut staged: HashMap<String, UsageEntry> = HashMap::new();
+    de.deserialize_any(SessionVisitor {
+        session_id: &mut session_id,
+        staged: &mut staged,
+    })
+    .map_err(|e| json_err(file, e))?;
+    // 至此完整解析成功; 非 gemini 消息/全零消息不会进入 staging
+    let sid = session_id.unwrap_or_else(|| "unknown".to_string());
+    for (msg_key, mut entry) in staged {
+        entry.session_id = Some(sid.clone());
+        candidates.insert(format!("{sid}:{msg_key}"), entry);
     }
+    Ok(())
+}
+
+/// 顶层对象 visitor: 只保留 sessionId, messages 逐条瞬态处理, 其余字段忽略
+struct SessionVisitor<'a> {
+    session_id: &'a mut Option<String>,
+    staged: &'a mut HashMap<String, UsageEntry>,
+}
+
+impl<'de> DeVisitor<'de> for SessionVisitor<'_> {
+    type Value = ();
+
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a gemini session object")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
+        // 键序不假设: sessionId 在 messages 之后也生效; 同名键后值覆盖前值(对齐
+        // serde_json Value 整读语义); 重复 messages 数组均处理(实际文件不出现)
+        while let Some(key) = map.next_key::<String>()? {
+            match key.as_str() {
+                "sessionId" => {
+                    *self.session_id = map.next_value::<Value>()?.as_str().map(str::to_string);
+                }
+                "messages" => map.next_value_seed(MessagesSeed {
+                    staged: self.staged,
+                })?,
+                _ => {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// messages 数组值的 seed: deserialize_seq 逐条取出元素, 单条瞬态解析后即释放
+struct MessagesSeed<'a> {
+    staged: &'a mut HashMap<String, UsageEntry>,
+}
+
+impl<'de> DeserializeSeed<'de> for MessagesSeed<'_> {
+    type Value = ();
+
+    fn deserialize<D: serde::Deserializer<'de>>(self, deserializer: D) -> Result<(), D::Error> {
+        deserializer.deserialize_seq(self)
+    }
+}
+
+impl<'de> DeVisitor<'de> for MessagesSeed<'_> {
+    type Value = ();
+
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("an array of messages")
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+        // 单条消息瞬态 Value: 处理完即释放, 峰值内存 O(单条); 非数组 messages
+        // (null/对象/字符串)触发 invalid_type 错误, 文件整体跳过并警告
+        while let Some(msg) = seq.next_element::<Value>()? {
+            if let Some((msg_key, entry)) = parse_message(&msg) {
+                self.staged.insert(msg_key, entry); // 同 key 后者覆盖(last-wins)
+            }
+        }
+        Ok(())
+    }
+}
+
+/// 解析单条消息: 返回 (msg_key, entry); session_id 后置(staging 阶段未知),
+/// entry.session_id 暂为 None, 由 stream_session 统一回填
+fn parse_message(msg: &Value) -> Option<(String, UsageEntry)> {
+    if load::str_get(msg, &["type"]) != Some("gemini") {
+        return None;
+    }
+    let input = load::u64_get(msg, &["tokens", "input"]);
+    let output = load::u64_get(msg, &["tokens", "output"]);
+    let cached = load::u64_get(msg, &["tokens", "cached"]);
+    let thoughts = load::u64_get(msg, &["tokens", "thoughts"]);
+    // 任一 token>0 才导入(纯缓存命中也保留)
+    if input == 0 && output == 0 && cached == 0 && thoughts == 0 {
+        return None;
+    }
+    // gemini 的 input 含 cached, 归一为 fresh input
+    let input = fresh_input(input, cached, 0);
+    // 去重键: msg.id(同 id last-wins); 缺 id 用完整消息内容哈希兜底(pi 同款):
+    // 任何内容差异都各自计数, 不折叠进固定 "unknown" 键互相覆盖(漏计),
+    // 字节级相同的消息仍去重
+    let msg_key = match load::str_get(msg, &["id"]).filter(|s| !s.is_empty()) {
+        Some(id) => id.to_string(),
+        None => format!("hash:{}", content_hash(msg)),
+    };
+    let model =
+        load::str_get(msg, &["model"]).map_or_else(|| "unknown".to_string(), normalize_model);
+    let created_at = msg
+        .get("timestamp")
+        .and_then(load::timestamp_to_epoch)
+        .unwrap_or_else(load::now_epoch);
+    // gemini 无自报成本, 待定价表估价; 思考 token 按输出计费, 并入 output
+    Some((
+        msg_key,
+        UsageEntry::new(
+            AppKind::Gemini,
+            model,
+            None,
+            created_at,
+            input,
+            output + thoughts,
+            cached,
+            0,
+            None,
+        ),
+    ))
 }
 
 /// msg.id 缺失时的内容哈希兜底(pi 同款)
