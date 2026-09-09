@@ -6,13 +6,13 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/language-Rust-orange.svg)](https://www.rust-lang.org/)
 
-A local token usage statistics CLI written in Rust. It reads log and database files left on the local machine by Claude Code, Codex, OpenCode, Gemini CLI, Grok Build, Pi, and Kimi Code to track token consumption and costs by app, model, and date. It has no daemon processes, makes no network requests, and accesses data sources in read-only mode.
+A local token usage statistics CLI written in Rust. It reads log and database files left on the local machine by Claude Code, Codex, OpenCode, Gemini CLI, Grok Build, Pi, Kimi Code, and Deepseek Harness to track token consumption and costs by app, model, and date. It has no daemon processes, makes no network requests, and accesses data sources in read-only mode.
 
 > This tool only scans logs and databases at runtime; it does not save logs or persist records. Therefore, the statistics represent only the total number of tokens currently in the local logs and databases. The results may be lower than those from cc-switch due to the deletion of some conversations.
 
 ## Features
 
-- Supports 7 agents: Claude / Codex / OpenCode / Gemini / Grok / Pi / Kimi
+- Supports 8 agents: Claude / Codex / OpenCode / Gemini / Grok / Pi / Kimi / Deepseek Harness
 - Grouped statistics by three dimensions: app, model, and date
 - Supports filtering by start and end dates (`--since` / `--until`)
 - Cost estimation priority:
@@ -110,7 +110,7 @@ tokrs [--app <APPS>] [--by <GROUP>] [--since <DATE>] [--until <DATE>] [--json] [
 
 | Parameter | Description |
 |---|---|
-| `--app <a,b,c>` | Count only the specified apps (comma-separated); available values: `claude`, `codex`, `opencode`, `gemini`, `grok`, `pi`, `kimi`; by default, count all |
+| `--app <a,b,c>` | Count only the specified apps (comma-separated); available values: `claude`, `codex`, `opencode`, `gemini`, `grok`, `pi`, `kimi` `dsh`; by default, count all |
 | `--by <GROUP>` | Grouping method: `app` (default) / `model` / `day` |
 | `-s, --since <YYYY-MM-DD>` | Start date (inclusive), based on local time zone |
 | `-u, --until <YYYY-MM-DD>` | End date (inclusive), based on local time zone |
@@ -228,6 +228,7 @@ Model Name Lookup Rules: **Exact matches take precedence, followed by the longes
 | Grok | `~/.grok/{sessions,archived_sessions}/**/updates.jsonl` | Check `turn_completed` value per round |
 | Pi | `$PI_CODING_AGENT_SESSION_DIR` > `$PI_CODING_AGENT_DIR/sessions` > `~/.pi/agent/sessions` (legacy `~/.pi/sessions` as fallback) | Deduped by `entry.id` / content hash |
 | Kimi | `<root>/sessions/**/agents/*/wire.jsonl` (root overridable via `$KIMI_CODE_HOME`, default `~/.kimi-code`) | `usage.record`: For each call, models are normalized uniformly (provider prefix stripped, lowercased; same for all apps), and duplicates are removed from the content signatures (fork copies are not counted twice) |
+| dsh | `$DSH_HOME` (default `~/.dsh`)/sessions/**/session-*/session.jsonl.zstd | zstd-compressed JSONL, streamed line-by-line; `assistant/message` event; The first line must be a `type:“session”` header; deduplicate using `message.id` (fallback to content hash if missing) on a first-in, first-out basis |
 
 > Environment variable paths support `~` prefix expansion and must be absolute; invalid values (e.g. relative paths) produce a warning and fall back to the default.
 
@@ -260,6 +261,7 @@ src/
 │   ├── grok.rs       # ~/.grok/{sessions,archived_sessions}/**/updates.jsonl
 │   ├── pi.rs         # ~/.pi/agent/sessions/*.jsonl
 │   ├── kimi.rs       # ~/.kimi-code/sessions/**/agents/*/wire.jsonl
+│   ├── dsh.rs        # ~/.dsh/sessions/**/session-*/session.jsonl.zstd
 │   ├── prince.rs     # pricing.json (version pricing / long context / peak hours / force)
 │   └── tests/        # Unit tests
 ├── io/

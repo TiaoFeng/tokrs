@@ -6,13 +6,13 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/language-Rust-orange.svg)](https://www.rust-lang.org/)
 
-使用 Rust 编写的本地 Token 用量统计 CLI。读取 Claude Code、Codex、OpenCode、Gemini CLI、Grok Build、Pi、Kimi Code 在本地留下的日志/数据库文件，统计各 app、各模型、各日期的 Token 消耗与成本。无守护进程、无网络请求、对数据源只读。
+使用 Rust 编写的本地 Token 用量统计 CLI。读取 Claude Code、Codex、OpenCode、Gemini CLI、Grok Build、Pi、Kimi Code、Deepseek Harness 在本地留下的日志/数据库文件，统计各 app、各模型、各日期的 Token 消耗与成本。无守护进程、无网络请求、对数据源只读。
 
 > 本工具仅在运行时扫描日志/数据库，不保存日志或持久化记录。因此统计的数据仅代表当下本地日志/数据库中的token总量。结果会因删除了一些对话而小于cc-switch
 
 ## 特性
 
-- 支持 7 种 agent：Claude / Codex / OpenCode / Gemini / Grok / Pi / Kimi
+- 支持 8 种 agent：Claude / Codex / OpenCode / Gemini / Grok / Pi / Kimi / Deepseek Harness
 - 按 app、模型、日期三种维度分组统计
 - 支持按起止日期（`--since` / `--until`）筛选
 - 成本估算优先级：
@@ -110,7 +110,7 @@ tokrs [--app <APPS>] [--by <GROUP>] [--since <DATE>] [--until <DATE>] [--json] [
 
 | 参数 | 说明 |
 |---|---|
-| `--app <a,b,c>` | 只统计指定 app，逗号分隔，可选值：`claude` `codex` `opencode` `gemini` `grok` `pi` `kimi`；缺省统计全部 |
+| `--app <a,b,c>` | 只统计指定 app，逗号分隔，可选值：`claude` `codex` `opencode` `gemini` `grok` `pi` `kimi` `dsh`；缺省统计全部 |
 | `--by <GROUP>` | 分组方式：`app`（默认）/ `model` / `day` |
 | `-s, --since <YYYY-MM-DD>` | 起始日期（含），按本地时区 |
 | `-u, --until <YYYY-MM-DD>` | 结束日期（含），按本地时区 |
@@ -228,6 +228,7 @@ mkdir -p ~/.config/tokrs && cp pricing.json ~/.config/tokrs/
 | Grok | `~/.grok/{sessions,archived_sessions}/**/updates.jsonl` | 逐轮 `turn_completed` 面值 |
 | Pi | `$PI_CODING_AGENT_SESSION_DIR` > `$PI_CODING_AGENT_DIR/sessions` > `~/.pi/agent/sessions`（旧布局 `~/.pi/sessions` 兜底） | 按 `entry.id` / 内容哈希去重 |
 | Kimi | `<数据根>/sessions/**/agents/*/wire.jsonl`（根可用 `$KIMI_CODE_HOME` 覆盖，默认 `~/.kimi-code`） | `usage.record` 每调用面值，model 统一归一化（剥 provider 前缀/小写，全 app 同款），内容签名去重（fork 副本不双算） |
+| dsh | `$DSH_HOME`（默认 `~/.dsh`）/sessions/**/session-*/session.jsonl.zstd | zstd 压缩 JSONL，逐行流式解压；`assistant/message` 事件；首行须为 `type:"session"` header；按 `message.id`（缺内容哈希兜底）first-wins 去重 |
 
 > 环境变量路径支持 `~` 前缀展开，但须为绝对路径；非法值（如相对路径）会警告并回退默认。
 
@@ -260,6 +261,7 @@ src/
 │   ├── grok.rs       # ~/.grok/{sessions,archived_sessions}/**/updates.jsonl
 │   ├── pi.rs         # ~/.pi/agent/sessions/*.jsonl
 │   ├── kimi.rs       # ~/.kimi-code/sessions/**/agents/*/wire.jsonl
+│   ├── dsh.rs        # ~/.dsh/sessions/**/session-*/session.jsonl.zstd
 │   ├── prince.rs     # pricing.json 定价（版本价 / 长上下文 / 峰时 / force）
 │   └── tests/        # 单元测试
 ├── io/
