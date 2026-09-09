@@ -21,6 +21,7 @@
 - 统计时自动为定价表中缺失的模型追加空模板，不覆盖已有条目
 - 缓存包含于输入 Token 的上游已在解析层扣除，Total 无重复计算
 - 各数据源独立去重，重复运行结果稳定
+- 文件级并行扫描：可选`--threads N` 指定每 app 并行线程数（缺省 = min(CPU 核数, 16, 文件数)；`--threads 1` 串行）
 - 支持 `--json` 机器可读输出
 - 终端 UTF-8 表格输出，千分位分隔
 
@@ -121,7 +122,7 @@ $ tokrs --json
 tokrs 只有一个入口，通过参数控制统计范围与输出：
 
 ```
-tokrs [--app <APPS>] [--by <GROUP>] [--since <DATE>] [--until <DATE>] [--json]
+tokrs [--app <APPS>] [--by <GROUP>] [--since <DATE>] [--until <DATE>] [--json] [--threads <N>]
 ```
 
 | 参数 | 说明 |
@@ -131,6 +132,7 @@ tokrs [--app <APPS>] [--by <GROUP>] [--since <DATE>] [--until <DATE>] [--json]
 | `-s, --since <YYYY-MM-DD>` | 起始日期（含），按本地时区 |
 | `-u, --until <YYYY-MM-DD>` | 结束日期（含），按本地时区 |
 | `--json` | 以 JSON 输出，便于脚本二次处理 |
+| `--threads <N>` | 每 app 并行扫描线程数；缺省 = min(CPU 核数, 16, 文件数)，0 视为缺省，1 = 串行；超过 16 提示后按 16 执行；非法值（负数/非数字）报错终止 |
 
 示例：
 
@@ -262,7 +264,8 @@ src/
 │   └── prince.rs     # pricing.json 定价（版本价 / 长上下文 / 峰时 / force）
 ├── io/
 │   ├── load.rs       # JSON/JSONL 解码、时间戳归一（epoch 秒）
-│   └── cli_print.rs  # 终端表格与 JSON 输出
+│   ├── cli_print.rs  # 终端表格与 JSON 输出
+│   └── progress.rs   # 绘制扫描读取进度条
 └── tests/            # 单元测试
 ```
 

@@ -21,6 +21,7 @@ A native token usage statistics CLI written in Rust. It directly reads the log a
 - During aggregation, automatically adds an empty template for missing models in the pricing table without overwriting existing entries
 - Upstream costs included in the input token are already deducted at the parsing layer; “Total” is not double-counted
 - Duplicate removal is performed independently for each data source; results remain consistent across repeated runs
+- File-level parallel scanning: Use the optional `--threads N` option to specify the number of parallel threads per app (default = min(number of CPU cores, 16, number of files); `--threads 1` runs in serial)
 - Supports `--json` machine-readable output
 - Terminal output in UTF-8 tables, with thousands separators
 
@@ -121,7 +122,7 @@ $ tokrs --json
 tokrs has only one entry point; parameters are used to control the scope of the statistics and the output:
 
 ```
-tokrs [--app <APPS>] [--by <GROUP>] [--since <DATE>] [--until <DATE>] [--json]
+tokrs [--app <APPS>] [--by <GROUP>] [--since <DATE>] [--until <DATE>] [--json] [--threads <N>]
 ```
 
 | Parameter | Description |
@@ -131,6 +132,7 @@ tokrs [--app <APPS>] [--by <GROUP>] [--since <DATE>] [--until <DATE>] [--json]
 | `-s, --since <YYYY-MM-DD>` | Start date (inclusive), based on local time zone |
 | `-u, --until <YYYY-MM-DD>` | End date (inclusive), based on local time zone |
 | `--json` | Output in JSON format for easy processing by scripts |
+| `--threads <N>` | Parallel scan threads per app; default = min(CPU cores, 16, file count), 0 = default, 1 = serial; values above 16 are clamped to 16 with a warning; invalid values are rejected with an error |
 
 Example:
 
@@ -262,7 +264,8 @@ src/
 │   └── prince.rs     # pricing.json (version pricing / long context / peak hours / force)
 ├── io/
 │   ├── load.rs       # JSON/JSONL decoding, timestamp normalization (epoch seconds)
-│   └── cli_print.rs  # Terminal tables and JSON output
+│   ├── cli_print.rs  # Terminal tables and JSON output
+│   └── progress.rs   # Draw a progress bar showing the scanning and reading progress
 └── tests/            # Unit tests
 ```
 
