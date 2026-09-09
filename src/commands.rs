@@ -35,7 +35,8 @@ pub struct Cli {
         long,
         value_delimiter = ',',
         ignore_case = true,
-        help = "Applications of Statistics (Claude, Codex, OpenCode, Gemini, Grok, Pi, Kimi, Dsh)-all by default"
+        // clap 对 ValueEnum 参数自动列出 possible values,
+        help = "Applications of Statistics (all by default)"
     )]
     app: Vec<AppKind>,
     #[arg(
