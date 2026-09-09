@@ -7,8 +7,11 @@
 //! 参考: cc-switch session_usage_pi.rs (增量游标/接管状态机等有状态逻辑不适用本工具)
 //!
 use serde_json::Value;
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashMap,
+    ffi::OsStr,
+    path::{Path, PathBuf},
+};
 
 use crate::{
     apps::{normalize_model, value_hash},
@@ -19,25 +22,33 @@ use crate::{
 
 const MAX_DEPTH: usize = 4;
 
+/// pi 会话根目录链(环境变量经 load::env_abs_path 归一, ~/ 展开, 非绝对警告回退):
+/// PI_CODING_AGENT_SESSION_DIR > $PI_CODING_AGENT_DIR/sessions > ~/.pi/agent/sessions;
+/// ~/.pi/sessions 为旧布局兜底(tokrs 保留, cc-switch 无此层); 多根重叠由
+/// collect_from 的 seen_files 去重
+fn session_roots(
+    home: &Path,
+    session_env: Option<&OsStr>,
+    agent_env: Option<&OsStr>,
+) -> Vec<PathBuf> {
+    let agent_root = load::env_abs_path("PI_CODING_AGENT_DIR", agent_env, home)
+        .unwrap_or_else(|| home.join(".pi").join("agent"));
+    let mut roots = Vec::new();
+    if let Some(p) = load::env_abs_path("PI_CODING_AGENT_SESSION_DIR", session_env, home) {
+        roots.push(p);
+    }
+    roots.push(agent_root.join("sessions"));
+    roots.push(home.join(".pi").join("sessions"));
+    roots
+}
+
 pub fn collect() -> Result<Vec<UsageEntry>, AppError> {
     let home = load::home_dir()?;
-    // 三候选根目录: 环境变量优先, 其余为新旧默认布局; 缺失目录自动为空
-    let mut roots: Vec<PathBuf> = Vec::new();
-    if let Some(raw) = std::env::var_os("PI_CODING_AGENT_SESSION_DIR") {
-        let s = raw.to_string_lossy();
-        let path = if let Some(suffix) = s.strip_prefix("~/") {
-            home.join(suffix)
-        } else if s == "~" {
-            home.clone()
-        } else {
-            PathBuf::from(s.as_ref())
-        };
-        if path.is_absolute() {
-            roots.push(path);
-        }
-    }
-    roots.push(home.join(".pi").join("agent").join("sessions"));
-    roots.push(home.join(".pi").join("sessions"));
+    let roots = session_roots(
+        &home,
+        std::env::var_os("PI_CODING_AGENT_SESSION_DIR").as_deref(),
+        std::env::var_os("PI_CODING_AGENT_DIR").as_deref(),
+    );
     collect_from(&roots)
 }
 

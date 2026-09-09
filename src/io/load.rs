@@ -7,6 +7,7 @@
 //!
 use serde_json::Value;
 use std::{
+    ffi::OsStr,
     fs,
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
@@ -23,6 +24,41 @@ pub fn home_dir() -> Result<PathBuf, AppError> {
         path: "$HOME".to_string(),
         source: std::io::Error::new(std::io::ErrorKind::NotFound, "home directory not found"),
     })
+}
+
+/// 环境变量路径值归一(各 app 数据根目录覆盖用)
+///
+/// trim + 空串视为未设置; `~`/`~/`/`~\` 前缀展开为 home 下路径;
+/// 其余须为绝对路径, 非绝对 stderr 警告一行后返回 None(调用方回退默认)——
+/// 防"设了非法值却静默读错库"无信号
+pub fn env_abs_path(var: &str, raw: Option<&OsStr>, home: &Path) -> Option<PathBuf> {
+    let s = raw?.to_string_lossy().trim().to_string();
+    if s.is_empty() {
+        return None;
+    }
+    let path = if s == "~" {
+        home.to_path_buf()
+    } else if let Some(suffix) = s.strip_prefix("~/").or_else(|| s.strip_prefix("~\\")) {
+        home.join(suffix)
+    } else {
+        PathBuf::from(&s)
+    };
+    if path.is_absolute() {
+        Some(path)
+    } else {
+        eprintln!("> {var}='{s}' 不是绝对路径, 已忽略(回退默认路径)");
+        None
+    }
+}
+
+/// XDG 数据根目录: XDG_DATA_HOME(空串视为未设置) > ~/.local/share
+pub fn xdg_data_dir(home: &Path, raw: Option<&OsStr>) -> PathBuf {
+    match raw {
+        Some(v) if !v.to_string_lossy().trim().is_empty() => {
+            PathBuf::from(v.to_string_lossy().trim())
+        }
+        _ => home.join(".local").join("share"),
+    }
 }
 
 pub fn now_epoch() -> i64 {

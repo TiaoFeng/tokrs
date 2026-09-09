@@ -3,7 +3,8 @@
 use serde_json::Value;
 use std::{
     collections::{HashMap, hash_map::Entry},
-    path::Path,
+    ffi::OsStr,
+    path::{Path, PathBuf},
 };
 
 use crate::{
@@ -15,8 +16,16 @@ use crate::{
 
 const MAX_DEPTH: usize = 5;
 
+/// claude 数据根(官方 CLAUDE_CONFIG_DIR > ~/.claude); 环境变量经 load::env_abs_path
+/// 归一(~/ 展开, 非绝对警告后回退默认)
+fn claude_base(home: &Path, env: Option<&OsStr>) -> PathBuf {
+    load::env_abs_path("CLAUDE_CONFIG_DIR", env, home).unwrap_or_else(|| home.join(".claude"))
+}
+
 pub fn collect() -> Result<Vec<UsageEntry>, AppError> {
-    let base = load::home_dir()?.join(".claude").join("projects");
+    let home = load::home_dir()?;
+    let base =
+        claude_base(&home, std::env::var_os("CLAUDE_CONFIG_DIR").as_deref()).join("projects");
     if !base.is_dir() {
         return Ok(Vec::new());
     }

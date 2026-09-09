@@ -1,6 +1,10 @@
 use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
-use std::{collections::HashSet, path::Path};
+use std::{
+    collections::HashSet,
+    ffi::OsStr,
+    path::{Path, PathBuf},
+};
 
 use crate::{
     apps::normalize_model,
@@ -9,16 +13,35 @@ use crate::{
     model::{AppKind, UsageEntry},
 };
 
+/// opencode 数据库路径(对齐 cc-switch opencode_config.rs:64-90):
+/// OPENCODE_DB(空串忽略; 绝对直用; 相对路径基于数据目录拼接, 不展开 ~ 同
+/// cc-switch 字面语义) > XDG_DATA_HOME > ~/.local/share/opencode/opencode.db
+fn db_path(home: &Path, xdg: Option<&OsStr>, custom: Option<&OsStr>) -> PathBuf {
+    let data_dir = load::xdg_data_dir(home, xdg).join("opencode");
+    match custom {
+        Some(raw) if !raw.to_string_lossy().is_empty() => {
+            let path = PathBuf::from(raw);
+            if path.is_absolute() {
+                path
+            } else {
+                data_dir.join(path)
+            }
+        }
+        _ => data_dir.join("opencode.db"),
+    }
+}
+
 pub fn collect() -> Result<Vec<UsageEntry>, AppError> {
-    let db_path = load::home_dir()?
-        .join(".local")
-        .join("share")
-        .join("opencode")
-        .join("opencode.db");
-    if !db_path.is_file() {
+    let home = load::home_dir()?;
+    let db = db_path(
+        &home,
+        std::env::var_os("XDG_DATA_HOME").as_deref(),
+        std::env::var_os("OPENCODE_DB").as_deref(),
+    );
+    if !db.is_file() {
         return Ok(Vec::new());
     }
-    collect_from(&db_path)
+    collect_from(&db)
 }
 
 pub fn collect_from(db_path: &Path) -> Result<Vec<UsageEntry>, AppError> {

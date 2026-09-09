@@ -14,6 +14,7 @@
 use serde_json::Value;
 use std::{
     collections::{HashMap, hash_map::Entry},
+    ffi::OsStr,
     path::{Path, PathBuf},
 };
 
@@ -26,8 +27,18 @@ use crate::{
 
 const MAX_DEPTH: usize = 5;
 
+/// kimi 数据根(官方 KIMI_CODE_HOME > ~/.kimi-code, 会话/日志等随根迁移);
+/// 环境变量经 load::env_abs_path 归一(~/ 展开, 非绝对警告后回退默认)
+fn kimi_base(home: &Path, env: Option<&OsStr>) -> PathBuf {
+    load::env_abs_path("KIMI_CODE_HOME", env, home).unwrap_or_else(|| home.join(".kimi-code"))
+}
+
 pub fn collect() -> Result<Vec<UsageEntry>, AppError> {
-    let base = load::home_dir()?.join(".kimi-code").join("sessions");
+    let base = kimi_base(
+        &load::home_dir()?,
+        std::env::var_os("KIMI_CODE_HOME").as_deref(),
+    )
+    .join("sessions");
     if !base.is_dir() {
         return Ok(Vec::new());
     }

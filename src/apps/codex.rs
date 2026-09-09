@@ -29,6 +29,7 @@
 use serde_json::Value;
 use std::{
     collections::HashMap,
+    ffi::OsStr,
     path::{Path, PathBuf},
 };
 
@@ -40,6 +41,12 @@ use crate::{
 };
 
 const SESSIONS_MAX_DEPTH: usize = 3;
+
+/// codex 数据根(官方 CODEX_HOME > ~/.codex); 环境变量经 load::env_abs_path
+/// 归一(~/ 展开, 非绝对警告后回退默认)
+fn codex_base(home: &Path, env: Option<&OsStr>) -> PathBuf {
+    load::env_abs_path("CODEX_HOME", env, home).unwrap_or_else(|| home.join(".codex"))
+}
 
 /// 有效快照须至少含一个本工具解析的 token 字段(对齐 cc-switch
 /// parse_cumulative_tokens); cache_write_input_tokens 为本工具扩展解析字段
@@ -55,7 +62,10 @@ const TOKEN_FIELDS: [&str; 7] = [
 ];
 
 pub fn collect() -> Result<Vec<UsageEntry>, AppError> {
-    let base = load::home_dir()?.join(".codex");
+    let base = codex_base(
+        &load::home_dir()?,
+        std::env::var_os("CODEX_HOME").as_deref(),
+    );
     if !base.is_dir() {
         return Ok(Vec::new());
     }

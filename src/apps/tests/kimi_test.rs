@@ -1,6 +1,7 @@
 use super::*;
+use std::ffi::OsStr;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temp_dir() -> std::path::PathBuf {
@@ -211,4 +212,28 @@ fn test_missing_base_returns_empty() {
     let base = temp_dir();
     fs::remove_dir_all(&base).unwrap();
     assert!(collect_from(&base).unwrap().is_empty());
+}
+
+#[test]
+fn test_kimi_base_env_resolution() {
+    let home = Path::new("/home/u");
+    // 未设/空串 → 默认; ~/ 展开; 绝对直用
+    assert_eq!(kimi_base(home, None), PathBuf::from("/home/u/.kimi-code"));
+    assert_eq!(
+        kimi_base(home, Some(OsStr::new(""))),
+        PathBuf::from("/home/u/.kimi-code")
+    );
+    assert_eq!(
+        kimi_base(home, Some(OsStr::new("~/kc"))),
+        PathBuf::from("/home/u/kc")
+    );
+    assert_eq!(
+        kimi_base(home, Some(OsStr::new("/abs/kc"))),
+        PathBuf::from("/abs/kc")
+    );
+    // 非绝对路径: 警告后回退默认
+    assert_eq!(
+        kimi_base(home, Some(OsStr::new("rel/kc"))),
+        PathBuf::from("/home/u/.kimi-code")
+    );
 }

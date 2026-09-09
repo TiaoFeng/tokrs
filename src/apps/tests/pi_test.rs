@@ -1,4 +1,5 @@
 use super::*;
+use std::ffi::OsStr;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -312,6 +313,37 @@ fn test_missing_roots_return_empty() {
     let base = temp_dir();
     fs::remove_dir_all(&base).unwrap();
     assert!(collect_from(&[base]).unwrap().is_empty());
+}
+
+#[test]
+fn test_session_roots_resolution() {
+    let home = Path::new("/home/u");
+    let agent_default = PathBuf::from("/home/u/.pi/agent/sessions");
+    let legacy = PathBuf::from("/home/u/.pi/sessions");
+    // 无 env: 新旧两个默认根
+    assert_eq!(
+        session_roots(home, None, None),
+        vec![agent_default.clone(), legacy.clone()]
+    );
+    // PI_CODING_AGENT_DIR 覆盖 agent 根(~/ 展开, 绝对直用)
+    assert_eq!(
+        session_roots(home, None, Some(OsStr::new("~/piagent"))),
+        vec![PathBuf::from("/home/u/piagent/sessions"), legacy.clone()]
+    );
+    // SESSION_DIR 前置, 默认根保留兜底(重叠由 collect_from 去重)
+    assert_eq!(
+        session_roots(home, Some(OsStr::new("/sdir")), None),
+        vec![
+            PathBuf::from("/sdir"),
+            agent_default.clone(),
+            legacy.clone()
+        ]
+    );
+    // 非绝对 SESSION_DIR: 警告后忽略, 回退默认链
+    assert_eq!(
+        session_roots(home, Some(OsStr::new("rel")), None),
+        vec![agent_default, legacy]
+    );
 }
 
 #[test]

@@ -1,4 +1,6 @@
 use super::*;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temp_db() -> Connection {
@@ -121,6 +123,42 @@ fn test_corrupted_db_warns_and_empty() {
     // DB 损坏: 警告后返回空结果, 不再 Err 中止全局
     assert!(collect_from(&path).unwrap().is_empty());
     std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn test_db_path_resolution() {
+    let home = Path::new("/home/u");
+    let default = PathBuf::from("/home/u/.local/share/opencode/opencode.db");
+    // 未设 → 默认
+    assert_eq!(db_path(home, None, None), default);
+    // XDG_DATA_HOME 覆盖数据目录
+    assert_eq!(
+        db_path(home, Some(OsStr::new("/xdg/data")), None),
+        PathBuf::from("/xdg/data/opencode/opencode.db")
+    );
+    // OPENCODE_DB 绝对直用
+    assert_eq!(
+        db_path(home, None, Some(OsStr::new("/abs/db.sqlite"))),
+        PathBuf::from("/abs/db.sqlite")
+    );
+    // OPENCODE_DB 相对路径基于数据目录拼接(不展开 ~, 对齐 cc-switch 字面语义)
+    assert_eq!(
+        db_path(
+            home,
+            Some(OsStr::new("/xdg/data")),
+            Some(OsStr::new("rel.db"))
+        ),
+        PathBuf::from("/xdg/data/opencode/rel.db")
+    );
+    assert_eq!(
+        db_path(home, None, Some(OsStr::new("~/weird"))),
+        PathBuf::from("/home/u/.local/share/opencode/~/weird")
+    );
+    // OPENCODE_DB 空串 → 回退 XDG 链
+    assert_eq!(
+        db_path(home, Some(OsStr::new("/xdg/data")), Some(OsStr::new(""))),
+        PathBuf::from("/xdg/data/opencode/opencode.db")
+    );
 }
 
 #[test]

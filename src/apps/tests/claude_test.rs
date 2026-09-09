@@ -1,4 +1,5 @@
 use super::*;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -134,4 +135,28 @@ fn test_unreadable_file_warns_and_continues() {
     let entries = collect_from(&base).unwrap();
     assert_eq!(entries.len(), 1);
     fs::remove_dir_all(&base).ok();
+}
+
+#[test]
+fn test_claude_base_env_resolution() {
+    let home = Path::new("/home/u");
+    // 未设/空串 → 默认; ~/ 展开; 绝对直用
+    assert_eq!(claude_base(home, None), PathBuf::from("/home/u/.claude"));
+    assert_eq!(
+        claude_base(home, Some(OsStr::new(""))),
+        PathBuf::from("/home/u/.claude")
+    );
+    assert_eq!(
+        claude_base(home, Some(OsStr::new("~/cd"))),
+        PathBuf::from("/home/u/cd")
+    );
+    assert_eq!(
+        claude_base(home, Some(OsStr::new("/abs/cd"))),
+        PathBuf::from("/abs/cd")
+    );
+    // 非绝对路径: 警告后回退默认
+    assert_eq!(
+        claude_base(home, Some(OsStr::new("rel/cd"))),
+        PathBuf::from("/home/u/.claude")
+    );
 }

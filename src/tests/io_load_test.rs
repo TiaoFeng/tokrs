@@ -1,4 +1,5 @@
 use super::*;
+use std::ffi::OsStr;
 use std::fs;
 use std::io::Cursor;
 
@@ -227,6 +228,51 @@ fn test_u64_and_str_get() {
     assert_eq!(u64_get(&v, &["nope"]), 0);
     assert_eq!(str_get(&v, &["s", "t"]), Some("x"));
     assert_eq!(str_get(&v, &["a", "t"]), None);
+}
+
+#[test]
+fn test_env_abs_path() {
+    let home = Path::new("/home/u");
+    // 未设/空串(含纯空白) → None
+    assert_eq!(env_abs_path("V", None, home), None);
+    assert_eq!(env_abs_path("V", Some(OsStr::new("  ")), home), None);
+    // ~/ 与 ~\ 前缀展开; 单独 ~ → home
+    assert_eq!(
+        env_abs_path("V", Some(OsStr::new("~/a")), home),
+        Some(PathBuf::from("/home/u/a"))
+    );
+    assert_eq!(
+        env_abs_path("V", Some(OsStr::new("~\\a")), home),
+        Some(PathBuf::from("/home/u/a"))
+    );
+    assert_eq!(
+        env_abs_path("V", Some(OsStr::new("~")), home),
+        Some(PathBuf::from("/home/u"))
+    );
+    // 绝对直用; 前后空白 trim
+    assert_eq!(
+        env_abs_path("V", Some(OsStr::new("/abs/x")), home),
+        Some(PathBuf::from("/abs/x"))
+    );
+    assert_eq!(
+        env_abs_path("V", Some(OsStr::new(" /abs/x ")), home),
+        Some(PathBuf::from("/abs/x"))
+    );
+    // 非绝对路径: 警告后 None(回退默认)
+    assert_eq!(env_abs_path("V", Some(OsStr::new("rel/x")), home), None);
+}
+
+#[test]
+fn test_xdg_data_dir() {
+    let home = Path::new("/home/u");
+    let default = PathBuf::from("/home/u/.local/share");
+    assert_eq!(xdg_data_dir(home, None), default);
+    // 空串视为未设置(XDG 规范, 对齐 cc-switch)
+    assert_eq!(xdg_data_dir(home, Some(OsStr::new(""))), default);
+    assert_eq!(
+        xdg_data_dir(home, Some(OsStr::new("/xdg/data"))),
+        PathBuf::from("/xdg/data")
+    );
 }
 
 #[test]
