@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/language-Rust-orange.svg)](https://www.rust-lang.org/)
 
-一个使用 Rust 编写的本地 Token 用量统计 CLI。直接读取 Claude Code、Codex、OpenCode、Gemini CLI、Grok Build、Pi、Kimi Code 在本地留下的日志/数据库文件，统计各 app、各模型、各日期的 Token 消耗与成本。无任何守护进程、无任何网络请求、对数据源只读。
+使用 Rust 编写的本地 Token 用量统计 CLI。读取 Claude Code、Codex、OpenCode、Gemini CLI、Grok Build、Pi、Kimi Code 在本地留下的日志/数据库文件，统计各 app、各模型、各日期的 Token 消耗与成本。无守护进程、无网络请求、对数据源只读。
 
 > 本工具仅在运行时扫描日志/数据库，不保存日志或持久化记录。因此统计的数据仅代表当下本地日志/数据库中的token总量。结果会因删除了一些对话而小于cc-switch
 
@@ -15,29 +15,12 @@
 - 支持 7 种 agent：Claude / Codex / OpenCode / Gemini / Grok / Pi / Kimi
 - 按 app、模型、日期三种维度分组统计
 - 支持按起止日期（`--since` / `--until`）筛选
-- 成本估算四级优先：
+- 成本估算优先级：
   - 定价表 force 覆盖 > 上游自报成本 > 定价表估价 > unpriced（计数提示，不计为 0）
 - 定价表 `pricing.json` 支持每模型时间版本价、长上下文加价、峰时加价
 - 统计时自动为定价表中缺失的模型追加空模板，不覆盖已有条目
-- 缓存包含于输入 Token 的上游已在解析层扣除，Total 无重复计算
-- 各数据源独立去重，重复运行结果稳定
-- 文件级并行扫描：可选`--threads N` 指定每 app 并行线程数（缺省 = min(CPU 核数, 16, 文件数)；`--threads 1` 串行）
-- 支持 `--json` 机器可读输出
-- 终端 UTF-8 表格输出，千分位分隔
-
-## 支持的数据源
-
-| App | 数据位置 | 说明 |
-|---|---|---|
-| Claude | `<数据根>/projects/**/*.jsonl`（根可用 `$CLAUDE_CONFIG_DIR` 覆盖，默认 `~/.claude`） | 按 `message.id` 去重 |
-| Codex | `<数据根>/{sessions/**,archived_sessions/*.jsonl}`（根可用 `$CODEX_HOME` 覆盖，默认 `~/.codex`） | `token_count` 事件；文件内同源快照/紧邻重复判零，fork 回放按父链前缀过滤，archived 同名副本保留最长 |
-| OpenCode | `<数据根>/opencode.db`：`$OPENCODE_DB` > `$XDG_DATA_HOME/opencode` > `~/.local/share/opencode`（SQLite 只读访问） | `OPENCODE_DB` 绝对路径直用、相对路径基于数据目录 |
-| Gemini | `~/.gemini/tmp/*/chats/session-*.json` | 单 JSON 对象流式逐消息解析（峰值内存 O(单条消息)），损坏文件警告并跳过 |
-| Grok | `~/.grok/{sessions,archived_sessions}/**/updates.jsonl` | 逐轮 `turn_completed` 面值 |
-| Pi | `$PI_CODING_AGENT_SESSION_DIR` > `$PI_CODING_AGENT_DIR/sessions` > `~/.pi/agent/sessions`（旧布局 `~/.pi/sessions` 兜底） | 按 entry.id / 内容哈希去重 |
-| Kimi | `<数据根>/sessions/**/agents/*/wire.jsonl`（根可用 `$KIMI_CODE_HOME` 覆盖，默认 `~/.kimi-code`） | `usage.record` 每调用面值，model 统一归一化（剥 provider 前缀/小写，全 app 同款），内容签名去重（fork 副本不双算） |
-
-> 环境变量路径支持 `~` 前缀展开，须为绝对路径；非法值（如相对路径）会警告并回退默认。
+- 支持多线程：可选`--threads N` 指定每 app 并行线程数（缺省 = min(CPU 核数, 16, 文件数)；`--threads 1` 串行）
+- 支持 `--json` 格式输出
 
 ## 安装
 
@@ -156,7 +139,9 @@ tokrs --by model --json              # 按模型分组并输出 JSON
 
 > 仓库中`./pricing.json`是根据[opencode](https://opencode.ai/docs/zen/)的价格表，以供参考。
 > 如果需要使用，可执行命令：
-> ```mkdir -p ~/.config/tokrs && cp pricing.json ~/.config/tokrs/```
+```bash
+mkdir -p ~/.config/tokrs && cp pricing.json ~/.config/tokrs/
+```
 
 首次运行时自动扫描所有出现过的模型并追加 `null` 模板条目（跳过 `unknown` 兜底名），填好价格即可计价。
 
@@ -232,6 +217,20 @@ tokrs --by model --json              # 按模型分组并输出 JSON
 
 模型名查找规则：**精确匹配优先，其次最长前缀匹配**（前缀边界须为非字母数字字符）。例如键 `gpt-5` 可匹配 `gpt-5-codex`、`gpt-5.1-2026`，但不会误配 `gpt-51x`。
 
+## 支持的数据源
+
+| App | 数据位置 | 说明 |
+|---|---|---|
+| Claude | `<数据根>/projects/**/*.jsonl`（根可用 `$CLAUDE_CONFIG_DIR` 覆盖，默认 `~/.claude`） | 按 `message.id` 去重 |
+| Codex | `<数据根>/{sessions/**,archived_sessions/*.jsonl}`（根可用 `$CODEX_HOME` 覆盖，默认 `~/.codex`） | `token_count` 事件；文件内同源快照/紧邻重复判零，fork 回放按父链前缀过滤，archived 同名副本保留最长 |
+| OpenCode | `<数据根>/opencode.db`：`$OPENCODE_DB` > `$XDG_DATA_HOME/opencode` > `~/.local/share/opencode`（SQLite 只读访问） | `OPENCODE_DB` 绝对路径直用、相对路径基于数据目录 |
+| Gemini | `~/.gemini/tmp/*/chats/session-*.json` | 单 JSON 对象流式逐消息解析（峰值内存 O(单条消息)），损坏文件警告并跳过 |
+| Grok | `~/.grok/{sessions,archived_sessions}/**/updates.jsonl` | 逐轮 `turn_completed` 面值 |
+| Pi | `$PI_CODING_AGENT_SESSION_DIR` > `$PI_CODING_AGENT_DIR/sessions` > `~/.pi/agent/sessions`（旧布局 `~/.pi/sessions` 兜底） | 按 `entry.id` / 内容哈希去重 |
+| Kimi | `<数据根>/sessions/**/agents/*/wire.jsonl`（根可用 `$KIMI_CODE_HOME` 覆盖，默认 `~/.kimi-code`） | `usage.record` 每调用面值，model 统一归一化（剥 provider 前缀/小写，全 app 同款），内容签名去重（fork 副本不双算） |
+
+> 环境变量路径支持 `~` 前缀展开，但须为绝对路径；非法值（如相对路径）会警告并回退默认。
+
 ## 从源代码构建
 
 > Rust ≥ 1.88
@@ -261,7 +260,8 @@ src/
 │   ├── grok.rs       # ~/.grok/{sessions,archived_sessions}/**/updates.jsonl
 │   ├── pi.rs         # ~/.pi/agent/sessions/*.jsonl
 │   ├── kimi.rs       # ~/.kimi-code/sessions/**/agents/*/wire.jsonl
-│   └── prince.rs     # pricing.json 定价（版本价 / 长上下文 / 峰时 / force）
+│   ├── prince.rs     # pricing.json 定价（版本价 / 长上下文 / 峰时 / force）
+│   └── tests/        # 单元测试
 ├── io/
 │   ├── load.rs       # JSON/JSONL 解码、时间戳归一（epoch 秒）
 │   ├── cli_print.rs  # 终端表格与 JSON 输出

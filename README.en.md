@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/language-Rust-orange.svg)](https://www.rust-lang.org/)
 
-A native token usage statistics CLI written in Rust. It directly reads the log and database files left by Claude Code, Codex, OpenCode, Gemini CLI, Grok Build, Pi, and Kimi Code on your local machine to track token consumption and costs by app, model, and date. It has no daemons, makes no network requests, and accesses data sources in read-only mode.
+A local token usage statistics CLI written in Rust. It reads log and database files left on the local machine by Claude Code, Codex, OpenCode, Gemini CLI, Grok Build, Pi, and Kimi Code to track token consumption and costs by app, model, and date. It has no daemon processes, makes no network requests, and accesses data sources in read-only mode.
 
 > This tool only scans logs and databases at runtime; it does not save logs or persist records. Therefore, the statistics represent only the total number of tokens currently in the local logs and databases. The results may be lower than those from cc-switch due to the deletion of some conversations.
 
@@ -15,29 +15,12 @@ A native token usage statistics CLI written in Rust. It directly reads the log a
 - Supports 7 agents: Claude / Codex / OpenCode / Gemini / Grok / Pi / Kimi
 - Grouped statistics by three dimensions: app, model, and date
 - Supports filtering by start and end dates (`--since` / `--until`)
-- Four-tier priority for cost estimation:
-  - Pricing table override > Upstream self-reported cost > Pricing table estimate > Unpriced (counted as a warning, not as 0)
+- Cost estimation priority:
+  - Pricing table override > Upstream self-reported costs > Pricing table estimates > Unpriced (counted as a warning, not as 0)
 - The `pricing.json` pricing table supports time-based pricing per model, long-context surcharges, and peak-hour surcharges
-- During aggregation, automatically adds an empty template for missing models in the pricing table without overwriting existing entries
-- Upstream costs included in the input token are already deducted at the parsing layer; “Total” is not double-counted
-- Duplicate removal is performed independently for each data source; results remain consistent across repeated runs
-- File-level parallel scanning: Use the optional `--threads N` option to specify the number of parallel threads per app (default = min(number of CPU cores, 16, number of files); `--threads 1` runs in serial)
-- Supports `--json` machine-readable output
-- Terminal output in UTF-8 tables, with thousands separators
-
-## Supported Data Sources
-
-| App | Data Location | Description |
-|---|---|---|
-| Claude | `<root>/projects/**/*.jsonl` (root overridable via `$CLAUDE_CONFIG_DIR`, default `~/.claude`) | Dedupe by `message.id` |
-| Codex | `<root>/{sessions/**,archived_sessions/*.jsonl}` (root overridable via `$CODEX_HOME`, default `~/.codex`) | `token_count` events; in-file same-source/adjacent snapshot repeats zeroed, fork replays filtered via parent-chain prefix match, same-name archived copies deduplicated (longest wins) |
-| OpenCode | `<root>/opencode.db`: `$OPENCODE_DB` > `$XDG_DATA_HOME/opencode` > `~/.local/share/opencode` (read-only access to SQLite) | `OPENCODE_DB` accepts an absolute path directly; relative paths resolve against the data directory |
-| Gemini | `~/.gemini/tmp/*/chats/session-*.json` | Single JSON object, streamed message-by-message (peak memory O(one message)); corrupted files are warned and skipped |
-| Grok | `~/.grok/{sessions,archived_sessions}/**/updates.jsonl` | Check `turn_completed` value per round |
-| Pi | `$PI_CODING_AGENT_SESSION_DIR` > `$PI_CODING_AGENT_DIR/sessions` > `~/.pi/agent/sessions` (legacy `~/.pi/sessions` as fallback) | Deduped by `entry.id` / content hash |
-| Kimi | `<root>/sessions/**/agents/*/wire.jsonl` (root overridable via `$KIMI_CODE_HOME`, default `~/.kimi-code`) | `usage.record`: For each call, models are normalized uniformly (provider prefix stripped, lowercased; same for all apps), and duplicates are removed from the content signatures (fork copies are not counted twice) |
-
-> Environment variable paths support `~` prefix expansion and must be absolute; invalid values (e.g. relative paths) produce a warning and fall back to the default.
+- During statistics generation, automatically adds an empty template for missing models in the pricing table without overwriting existing entries
+- Supports multithreading: use `--threads N` to specify the number of parallel threads per app (default = min(number of CPU cores, 16, number of files); `--threads 1` runs in series)
+- Supports `--json` format output
 
 ## Installation
 
@@ -158,7 +141,9 @@ When run for the first time, it automatically scans all existing models and adds
 
 > The `./pricing.json` file in the repository is based on [opencode](https://opencode.ai/docs/zen/) sample pricing table and is provided for reference.
 > If you need to use it, run the following command:
-> ```mkdir -p ~/.config/tokrs && cp pricing.json ~/.config/tokrs/```
+```bash
+mkdir -p ~/.config/tokrs && cp pricing.json ~/.config/tokrs/
+```
 
 Examples (all unit prices are in **USD per million tokens**):
 
@@ -232,6 +217,20 @@ Field Descriptions:
 
 Model Name Lookup Rules: **Exact matches take precedence, followed by the longest prefix matches** (prefix boundaries must consist of non-alphanumeric characters). For example, the key `gpt-5` matches `gpt-5-codex` and `gpt-5.1-2026`, but does not falsely match `gpt-51x`.
 
+## Supported Data Sources
+
+| App | Data Location | Description |
+|---|---|---|
+| Claude | `<root>/projects/**/*.jsonl` (root overridable via `$CLAUDE_CONFIG_DIR`, default `~/.claude`) | Dedupe by `message.id` |
+| Codex | `<root>/{sessions/**,archived_sessions/*.jsonl}` (root overridable via `$CODEX_HOME`, default `~/.codex`) | `token_count` events; in-file same-source/adjacent snapshot repeats zeroed, fork replays filtered via parent-chain prefix match, same-name archived copies deduplicated (longest wins) |
+| OpenCode | `<root>/opencode.db`: `$OPENCODE_DB` > `$XDG_DATA_HOME/opencode` > `~/.local/share/opencode` (read-only access to SQLite) | `OPENCODE_DB` accepts an absolute path directly; relative paths resolve against the data directory |
+| Gemini | `~/.gemini/tmp/*/chats/session-*.json` | Single JSON object, streamed message-by-message (peak memory O(one message)); corrupted files are warned and skipped |
+| Grok | `~/.grok/{sessions,archived_sessions}/**/updates.jsonl` | Check `turn_completed` value per round |
+| Pi | `$PI_CODING_AGENT_SESSION_DIR` > `$PI_CODING_AGENT_DIR/sessions` > `~/.pi/agent/sessions` (legacy `~/.pi/sessions` as fallback) | Deduped by `entry.id` / content hash |
+| Kimi | `<root>/sessions/**/agents/*/wire.jsonl` (root overridable via `$KIMI_CODE_HOME`, default `~/.kimi-code`) | `usage.record`: For each call, models are normalized uniformly (provider prefix stripped, lowercased; same for all apps), and duplicates are removed from the content signatures (fork copies are not counted twice) |
+
+> Environment variable paths support `~` prefix expansion and must be absolute; invalid values (e.g. relative paths) produce a warning and fall back to the default.
+
 ## Build from Source Code
 
 > Rust ≥ 1.88
@@ -261,7 +260,8 @@ src/
 │   ├── grok.rs       # ~/.grok/{sessions,archived_sessions}/**/updates.jsonl
 │   ├── pi.rs         # ~/.pi/agent/sessions/*.jsonl
 │   ├── kimi.rs       # ~/.kimi-code/sessions/**/agents/*/wire.jsonl
-│   └── prince.rs     # pricing.json (version pricing / long context / peak hours / force)
+│   ├── prince.rs     # pricing.json (version pricing / long context / peak hours / force)
+│   └── tests/        # Unit tests
 ├── io/
 │   ├── load.rs       # JSON/JSONL decoding, timestamp normalization (epoch seconds)
 │   ├── cli_print.rs  # Terminal tables and JSON output
