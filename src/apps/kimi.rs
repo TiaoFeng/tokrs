@@ -33,7 +33,7 @@ fn kimi_base(home: &Path, env: Option<&OsStr>) -> PathBuf {
     load::env_abs_path("KIMI_CODE_HOME", env, home).unwrap_or_else(|| home.join(".kimi-code"))
 }
 
-pub fn collect() -> Result<Vec<UsageEntry>, AppError> {
+pub fn collect(threads: Option<usize>) -> Result<Vec<UsageEntry>, AppError> {
     let base = kimi_base(
         &load::home_dir()?,
         std::env::var_os("KIMI_CODE_HOME").as_deref(),
@@ -42,28 +42,43 @@ pub fn collect() -> Result<Vec<UsageEntry>, AppError> {
     if !base.is_dir() {
         return Ok(Vec::new());
     }
-    collect_from(&base)
+    collect_from_with(&base, threads)
 }
 
+/// 测试便捷入口(auto 线程); 生产路径经 collect(threads)
+#[cfg(test)]
 pub fn collect_from(base: &Path) -> Result<Vec<UsageEntry>, AppError> {
+    collect_from_with(base, None)
+}
+
+fn collect_from_with(base: &Path, threads: Option<usize>) -> Result<Vec<UsageEntry>, AppError> {
     // 预筛真正解析的文件(只认 wire.jsonl, 排除 tasks/blobs 等目录的其它 jsonl, 对齐 grok),
     // 总字节数供进度条按字节推进
     let files: Vec<PathBuf> = load::discover_files(base, "jsonl", MAX_DEPTH)
         .into_iter()
         .filter(|f| load::file_name_str(f) == "wire.jsonl")
         .collect();
-    // 全局 HashMap(跨文件), 与 claude 同款: fork 复制出的副本会话才能被去重
-    let mut candidates: HashMap<String, UsageEntry> = HashMap::new();
-    let mut progress = Progress::start("kimi", load::total_bytes(&files));
-    for file in &files {
-        progress.set_file(load::file_name_str(file));
-        parse_wire(file, &mut progress, &mut candidates);
-    }
+    let threads = threads.unwrap_or_else(|| load::auto_threads(files.len()));
+    let progress = Progress::start("kimi", load::total_bytes(&files), files.len());
+    // 并行逐文件解析(session_id/内容签名均为文件内状态);
+    // 单文件读取失败警告+err 计数后该文件不计, 不中止全局
+    let per_file: Vec<HashMap<String, UsageEntry>> =
+        load::map_files(&files, threads, &progress, parse_wire);
     progress.finish();
+    // 合并: 按文件序 first-wins(fork 复制出的副本会话靠先到者去重, files
+    // 确定性排序, 与串行单全局 map 逐字一致)
+    let mut candidates: HashMap<String, UsageEntry> = HashMap::new();
+    for map in per_file {
+        for (key, entry) in map {
+            candidates.entry(key).or_insert(entry);
+        }
+    }
     Ok(candidates.into_values().collect())
 }
 
-fn parse_wire(file: &Path, progress: &mut Progress, candidates: &mut HashMap<String, UsageEntry>) {
+/// 解析单个 wire.jsonl: 返回该文件的去重表(内容签名 → entry)
+fn parse_wire(file: &Path, progress: &Progress) -> HashMap<String, UsageEntry> {
+    let mut candidates: HashMap<String, UsageEntry> = HashMap::new();
     // 会话 ID = 路径中 "session_" 前缀的祖先目录名(仅备查, 不进 dedup 键)
     let session_id = file.ancestors().find_map(|p| {
         p.file_name()
@@ -71,7 +86,7 @@ fn parse_wire(file: &Path, progress: &mut Progress, candidates: &mut HashMap<Str
             .filter(|n| n.starts_with("session_"))
             .map(str::to_string)
     });
-    // 单文件读取失败警告后跳过(不中止全局); 逐行流式防 GB 级文件整读驻留
+    // 单文件读取失败警告+err 计数后跳过(不中止全局); 逐行流式防 GB 级文件整读驻留
     if let Err(e) = load::for_each_jsonl_progress(file, &[], progress, |record| {
         if load::str_get(&record, &["type"]) != Some("usage.record") {
             return true;
@@ -130,7 +145,9 @@ fn parse_wire(file: &Path, progress: &mut Progress, candidates: &mut HashMap<Str
         true
     }) {
         load::warn_file(&e);
+        progress.note_error();
     }
+    candidates
 }
 
 #[cfg(test)]

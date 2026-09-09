@@ -1,80 +1,116 @@
 //! 扫描进度条(stderr, 仅 TTY 生效)
 //!
-//! 字节驱动的单行动态进度条(与下载进度条同款 \r 重绘), 文件切换时以后缀实时显示;
+//! 句柄式进度(Arc<Mutex<>> 内核, 可 Clone 跨线程共享): 字节驱动 + 文件计数;
+//! 并行扫描下显示"N/M files"与 err 计数(单文件名展示在并行下语义不成立,
+//! 出错文件的路径由各解析器的警告行逐行输出, 不会被 \r 重绘覆盖);
 //! stdout 零污染(--json/管道不受影响), stderr 非 TTY 时所有渲染自动静默
 //!
 use std::io::{IsTerminal, stderr};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// 重绘节流间隔
 const REDRAW_INTERVAL: Duration = Duration::from_millis(100);
 /// 进度条字符宽
 const BAR_WIDTH: usize = 40;
-/// 文件名后缀最大显示宽度(保留尾部: rollout 文件名的 uuid 在尾部)
-const FILE_NAME_WIDTH: usize = 48;
 /// 整行最大渲染宽度(超出截断, 右侧补空格擦除残留)
 const LINE_WIDTH: usize = 128;
 
-/// 扫描进度(字节驱动)
-pub struct Progress {
-    label: &'static str,
-    file: String,
+/// 进度内核状态(锁内持有)
+struct Inner {
     total: u64,
     done: u64,
+    files_total: usize,
+    files_done: usize,
+    errors: usize,
     last_render: Option<Instant>,
-    tty: bool,
     finished: bool,
 }
 
+/// 扫描进度(字节 + 文件计数驱动, 可跨线程共享)
+#[derive(Clone)]
+pub struct Progress {
+    label: &'static str,
+    tty: bool,
+    inner: Arc<Mutex<Inner>>,
+}
+
 impl Progress {
-    /// 创建进度(total_bytes 为本 app 待扫描总字节)
-    pub fn start(label: &'static str, total_bytes: u64) -> Self {
+    /// 创建进度(total_bytes 为本 app 待扫描总字节, files_total 为文件总数)
+    pub fn start(label: &'static str, total_bytes: u64, files_total: usize) -> Self {
         Self {
             label,
-            file: String::new(),
-            total: total_bytes,
-            done: 0,
-            last_render: None,
             tty: stderr().is_terminal(),
-            finished: false,
+            inner: Arc::new(Mutex::new(Inner {
+                total: total_bytes,
+                done: 0,
+                files_total,
+                files_done: 0,
+                errors: 0,
+                last_render: None,
+                finished: false,
+            })),
         }
     }
 
-    /// 切换当前处理文件并立即重绘
-    pub fn set_file(&mut self, name: &str) {
-        self.file = tail(name, FILE_NAME_WIDTH);
-        self.draw();
-    }
-
     /// 累计已消费字节数(内部节流重绘)
-    pub fn add(&mut self, bytes: u64) {
-        self.done += bytes;
-        let throttled = self
-            .last_render
-            .is_some_and(|t| t.elapsed() < REDRAW_INTERVAL);
+    pub fn add(&self, bytes: u64) {
+        let throttled = {
+            let mut inner = self.inner.lock().unwrap();
+            inner.done += bytes;
+            inner
+                .last_render
+                .is_some_and(|t| t.elapsed() < REDRAW_INTERVAL)
+        };
         if !throttled {
             self.draw();
         }
     }
 
-    /// 完成收尾(补换行); 幂等
-    pub fn finish(&mut self) {
-        if !self.finished {
-            self.finished = true;
-            self.draw();
-            if self.tty {
-                eprintln!();
-            }
-        }
+    /// 标记一个文件处理完成(立即重绘, 文件计数可见)
+    pub fn file_done(&self) {
+        self.inner.lock().unwrap().files_done += 1;
+        self.draw();
     }
 
-    fn draw(&mut self) {
-        if !self.tty || self.finished {
+    /// 记一次文件级错误(进度条显示 err 计数; 文件名由警告行输出)
+    pub fn note_error(&self) {
+        self.inner.lock().unwrap().errors += 1;
+        self.draw();
+    }
+
+    /// 完成收尾: 渲染最终帧后补换行; 幂等
+    pub fn finish(&self) {
+        if !self.tty {
+            self.inner.lock().unwrap().finished = true;
             return;
         }
-        self.last_render = Some(Instant::now());
-        let pct = if self.total > 0 {
-            (self.done.min(self.total)) as f64 / self.total as f64 * 100.0
+        let mut inner = self.inner.lock().unwrap();
+        if inner.finished {
+            return;
+        }
+        self.draw_frame(&mut inner);
+        inner.finished = true;
+        drop(inner);
+        eprintln!();
+    }
+
+    fn draw(&self) {
+        if !self.tty {
+            return;
+        }
+        let mut inner = self.inner.lock().unwrap();
+        if inner.finished {
+            return;
+        }
+        self.draw_frame(&mut inner);
+    }
+
+    /// 渲染一帧(调用方持锁并负责 finished 检查)
+    fn draw_frame(&self, inner: &mut Inner) {
+        inner.last_render = Some(Instant::now());
+        let pct = if inner.total > 0 {
+            (inner.done.min(inner.total)) as f64 / inner.total as f64 * 100.0
         } else {
             100.0
         };
@@ -89,13 +125,18 @@ impl Progress {
                 ".".repeat(BAR_WIDTH - filled),
             ),
         };
+        let files = format!(" {:>4}/{} files", inner.files_done, inner.files_total);
+        let err = if inner.errors > 0 {
+            format!(", {} err", inner.errors)
+        } else {
+            String::new()
+        };
         let msg = format!(
-            "{} [{head}{rest}] {:>5.1}% {:>9}/{:<9} {}",
+            "{} [{head}{rest}] {:>5.1}% {:>9}/{:<9}{files}{err}",
             self.label,
             pct,
-            fmt_bytes(self.done),
-            fmt_bytes(self.total),
-            self.file,
+            fmt_bytes(inner.done),
+            fmt_bytes(inner.total),
         );
         // 右侧补空格擦除上一帧残留, 整行截断防终端折行
         let msg = truncate(&msg, LINE_WIDTH);
@@ -127,16 +168,6 @@ pub fn fmt_bytes(n: u64) -> String {
     unreachable!("units 末项已兜底返回")
 }
 
-/// 保留尾部的截断(文件名 uuid 在尾部, 头部时间戳可舍)
-fn tail(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
-        s.to_string()
-    } else {
-        let skip = s.chars().count() - max_chars;
-        s.chars().skip(skip).collect()
-    }
-}
-
 /// 字符级截断(渲染行宽控制)
 fn truncate(s: &str, max_chars: usize) -> String {
     s.chars().take(max_chars).collect()
@@ -156,12 +187,26 @@ mod tests {
 
     #[test]
     fn test_progress_non_tty_silent() {
-        // 测试环境 stderr 非 TTY: 全流程静默, 只验证不 panic 与幂等
-        let mut p = Progress::start("test", 1000);
-        p.set_file("a.jsonl");
-        p.add(400);
-        p.add(600);
-        p.finish();
-        p.finish();
+        // 测试环境 stderr 非 TTY: 全流程静默, 只验证不 panic 与 finish 幂等
+        let progress = Progress::start("test", 1000, 4);
+        progress.add(400);
+        progress.file_done();
+        progress.note_error();
+        progress.add(600);
+        progress.file_done();
+        progress.finish();
+        progress.finish();
+    }
+
+    #[test]
+    fn test_progress_clone_shares_state() {
+        // 句柄 Clone 共享同一内核: 跨"线程"句柄的计数汇入同一进度
+        let progress = Progress::start("test", 100, 2);
+        let cloned = progress.clone();
+        cloned.file_done();
+        progress.file_done();
+        cloned.note_error();
+        progress.finish();
+        cloned.finish(); // 幂等: 不再补换行
     }
 }

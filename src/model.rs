@@ -49,7 +49,7 @@ impl fmt::Display for AppKind {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct UsageEntry {
     pub app: AppKind,
     pub model: String,

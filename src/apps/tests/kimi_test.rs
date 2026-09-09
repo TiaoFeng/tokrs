@@ -237,3 +237,56 @@ fn test_kimi_base_env_resolution() {
         PathBuf::from("/home/u/.kimi-code")
     );
 }
+
+/// 确定性排序(HashMap 输出序不定, 比较前排序)
+fn sorted(mut entries: Vec<UsageEntry>) -> Vec<UsageEntry> {
+    entries.sort_by(|x, y| {
+        x.created_at
+            .cmp(&y.created_at)
+            .then(x.model.cmp(&y.model))
+            .then(x.total_tokens().cmp(&y.total_tokens()))
+            .then(x.input_tokens.cmp(&y.input_tokens))
+            .then(x.output_tokens.cmp(&y.output_tokens))
+    });
+    entries
+}
+
+#[test]
+fn test_parallel_scan_deterministic() {
+    let base = temp_dir();
+    write_wire(
+        &base,
+        "session_a",
+        "main",
+        &[usage_line(
+            "main",
+            "moonshot-cn/kimi-k3",
+            1000,
+            10,
+            5,
+            0,
+            0,
+            None,
+        )],
+    );
+    write_wire(
+        &base,
+        "session_b",
+        "main",
+        &[usage_line(
+            "main",
+            "moonshot-cn/kimi-k3",
+            2000,
+            20,
+            8,
+            0,
+            0,
+            None,
+        )],
+    );
+    let one = sorted(collect_from_with(&base, Some(1)).unwrap());
+    let four = sorted(collect_from_with(&base, Some(4)).unwrap());
+    assert_eq!(one, four);
+    assert_eq!(four.len(), 2);
+    fs::remove_dir_all(&base).ok();
+}

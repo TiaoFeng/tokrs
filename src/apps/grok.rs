@@ -21,37 +21,49 @@ use crate::{
 
 const MAX_DEPTH: usize = 4;
 
-pub fn collect() -> Result<Vec<UsageEntry>, AppError> {
+pub fn collect(threads: Option<usize>) -> Result<Vec<UsageEntry>, AppError> {
     let base = load::home_dir()?.join(".grok");
     if !base.is_dir() {
         return Ok(Vec::new());
     }
-    collect_from(&base)
+    collect_from_with(&base, threads)
 }
 
+/// 测试便捷入口(auto 线程); 生产路径经 collect(threads)
+#[cfg(test)]
 pub fn collect_from(base: &Path) -> Result<Vec<UsageEntry>, AppError> {
+    collect_from_with(base, None)
+}
+
+fn collect_from_with(base: &Path, threads: Option<usize>) -> Result<Vec<UsageEntry>, AppError> {
     // 预筛真正解析的文件(只认 updates.jsonl), 总字节数供进度条按字节推进
     let mut files: Vec<PathBuf> = Vec::new();
     for root in ["sessions", "archived_sessions"] {
         files.extend(load::discover_files(&base.join(root), "jsonl", MAX_DEPTH));
     }
     files.retain(|f| load::file_name_str(f) == "updates.jsonl");
-    // 去重键: session_id:prompt_id(缺失时为事件序号):model, 后出现者覆盖(UPSERT 语义)
-    let mut candidates: HashMap<String, UsageEntry> = HashMap::new();
-    let mut progress = Progress::start("grok", load::total_bytes(&files));
-    for file in &files {
-        progress.set_file(load::file_name_str(file));
-        parse_updates(file, &mut progress, &mut candidates);
-    }
+    let threads = threads.unwrap_or_else(|| load::auto_threads(files.len()));
+    let progress = Progress::start("grok", load::total_bytes(&files), files.len());
+    // 并行逐文件解析(session_id/event_index 均为文件内状态);
+    // 单文件读取失败警告+err 计数后该文件不计, 不中止全局
+    let per_file: Vec<HashMap<String, UsageEntry>> =
+        load::map_files(&files, threads, &progress, parse_updates);
     progress.finish();
+    // 合并: 按文件序 last-wins(sessions 与 archived 同 session 副本后者覆盖,
+    // files 已确定性排序, 与串行单全局 map 逐字一致)
+    let mut candidates: HashMap<String, UsageEntry> = HashMap::new();
+    for map in per_file {
+        for (key, entry) in map {
+            candidates.insert(key, entry);
+        }
+    }
     Ok(candidates.into_values().collect())
 }
 
-fn parse_updates(
-    file: &Path,
-    progress: &mut Progress,
-    candidates: &mut HashMap<String, UsageEntry>,
-) {
+/// 解析单个 updates.jsonl: 返回该文件的去重表(session_id:prompt_id:model → entry)
+fn parse_updates(file: &Path, progress: &Progress) -> HashMap<String, UsageEntry> {
+    // 去重键: session_id:prompt_id(缺失时为事件序号):model, 后出现者覆盖(UPSERT 语义)
+    let mut candidates: HashMap<String, UsageEntry> = HashMap::new();
     // 会话 ID = updates.jsonl 的父目录名(UUIDv7, 全局唯一)
     let session_id = file
         .parent()
@@ -60,7 +72,7 @@ fn parse_updates(
         .unwrap_or("unknown");
     // 序号只对有效的用量事件递增(对齐 cc-switch 的 events 下标)
     let mut event_index = 0usize;
-    // 单文件读取失败警告后跳过(不中止全局); 逐行流式防 GB 级文件整读驻留
+    // 单文件读取失败警告+err 计数后跳过(不中止全局); 逐行流式防 GB 级文件整读驻留
     if let Err(e) = load::for_each_jsonl_progress(file, &[], progress, |record| {
         if load::str_get(&record, &["method"]) != Some("_x.ai/session/update") {
             return true;
@@ -124,7 +136,9 @@ fn parse_updates(
         true
     }) {
         load::warn_file(&e);
+        progress.note_error();
     }
+    candidates
 }
 
 /// 逐模型面值用量; 缺 modelUsage 时回退顶层 usage 且模型名未知

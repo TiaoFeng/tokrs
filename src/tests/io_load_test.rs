@@ -213,8 +213,8 @@ fn test_discover_files_skips_fifo() {
 #[test]
 fn test_progress_reader_forwards_content() {
     // ProgressReader: 透传内容并逐块向进度条上报字节(非 TTY 下 Progress 静默)
-    let mut progress = Progress::start("test", 5);
-    let mut reader = ProgressReader::new(Cursor::new("hello"), &mut progress);
+    let progress = Progress::start("test", 5, 1);
+    let mut reader = ProgressReader::new(Cursor::new("hello"), progress);
     let mut out = String::new();
     reader.read_to_string(&mut out).unwrap();
     assert_eq!(out, "hello");
@@ -273,6 +273,30 @@ fn test_xdg_data_dir() {
         xdg_data_dir(home, Some(OsStr::new("/xdg/data"))),
         PathBuf::from("/xdg/data")
     );
+}
+
+#[test]
+fn test_map_files_preserves_order() {
+    // 结果按输入文件序回填(与线程数无关); threads>文件数自动截断; 空输入安全
+    let base = temp_dir("map");
+    let files: Vec<PathBuf> = (0..9).map(|i| base.join(format!("f{i}.jsonl"))).collect();
+    let progress = Progress::start("test", 0, files.len());
+    let index_of = |p: &Path| -> usize {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_prefix('f'))
+            .and_then(|n| n.strip_suffix(".jsonl"))
+            .unwrap()
+            .parse()
+            .unwrap()
+    };
+    let parallel: Vec<usize> = map_files(&files, 4, &progress, |p, _| index_of(p));
+    assert_eq!(parallel, (0..9).collect::<Vec<_>>());
+    let serial: Vec<usize> = map_files(&files, 1, &progress, |p, _| index_of(p));
+    assert_eq!(serial, parallel);
+    let empty: Vec<usize> = map_files::<usize, _>(&[], 8, &progress, |_, _| 1);
+    assert!(empty.is_empty());
+    fs::remove_dir_all(&base).ok();
 }
 
 #[test]

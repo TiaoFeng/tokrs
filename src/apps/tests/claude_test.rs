@@ -160,3 +160,44 @@ fn test_claude_base_env_resolution() {
         PathBuf::from("/home/u/.claude")
     );
 }
+
+/// 确定性排序(HashMap 输出序不定, 比较前排序)
+fn sorted(mut entries: Vec<UsageEntry>) -> Vec<UsageEntry> {
+    entries.sort_by(|x, y| {
+        x.created_at
+            .cmp(&y.created_at)
+            .then(x.model.cmp(&y.model))
+            .then(x.total_tokens().cmp(&y.total_tokens()))
+            .then(x.input_tokens.cmp(&y.input_tokens))
+            .then(x.output_tokens.cmp(&y.output_tokens))
+    });
+    entries
+}
+
+#[test]
+fn test_parallel_scan_deterministic() {
+    let base = temp_dir();
+    // 同 id 跨文件: 跨文件合并规则与两条执行路径同时覆盖
+    write_session(
+        &base,
+        "a.jsonl",
+        &[
+            assistant_line("m1", 10, None),
+            assistant_line("m2", 20, Some("end_turn")),
+        ],
+    );
+    write_session(
+        &base,
+        "b.jsonl",
+        &[
+            assistant_line("m1", 30, None),
+            assistant_line("m3", 5, None),
+        ],
+    );
+    let one = sorted(collect_from_with(&base, Some(1)).unwrap());
+    let four = sorted(collect_from_with(&base, Some(4)).unwrap());
+    assert_eq!(one, four);
+    // 合并语义不因并行改变: 同 id 取 stop_reason 优先者, 共 3 个去重后条目
+    assert_eq!(four.len(), 3);
+    fs::remove_dir_all(&base).ok();
+}

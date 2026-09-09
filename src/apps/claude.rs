@@ -22,37 +22,70 @@ fn claude_base(home: &Path, env: Option<&OsStr>) -> PathBuf {
     load::env_abs_path("CLAUDE_CONFIG_DIR", env, home).unwrap_or_else(|| home.join(".claude"))
 }
 
-pub fn collect() -> Result<Vec<UsageEntry>, AppError> {
+pub fn collect(threads: Option<usize>) -> Result<Vec<UsageEntry>, AppError> {
     let home = load::home_dir()?;
     let base =
         claude_base(&home, std::env::var_os("CLAUDE_CONFIG_DIR").as_deref()).join("projects");
     if !base.is_dir() {
         return Ok(Vec::new());
     }
-    collect_from(&base)
+    collect_from_with(&base, threads)
 }
 
+/// 测试便捷入口(auto 线程); 生产路径经 collect(threads)
+#[cfg(test)]
 pub fn collect_from(base: &Path) -> Result<Vec<UsageEntry>, AppError> {
-    let mut candidates: HashMap<String, Candidate> = HashMap::new();
+    collect_from_with(base, None)
+}
+
+fn collect_from_with(base: &Path, threads: Option<usize>) -> Result<Vec<UsageEntry>, AppError> {
     let files = load::discover_files(base, "jsonl", MAX_DEPTH);
-    let mut progress = Progress::start("claude", load::total_bytes(&files));
-    // 流式逐行: 文件可达 GB 级, 整读驻留会耗尽内存;
-    // 单文件读取失败警告后跳过, 不中止全局统计
-    for file in &files {
-        progress.set_file(load::file_name_str(file));
-        let mut session_fallback: Option<String> = None;
-        if let Err(e) = load::for_each_jsonl_progress(file, &[], &mut progress, |value| {
-            if session_fallback.is_none() {
-                session_fallback = load::str_get(&value, &["sessionId"]).map(str::to_string);
+    let threads = threads.unwrap_or_else(|| load::auto_threads(files.len()));
+    let progress = Progress::start("claude", load::total_bytes(&files), files.len());
+    // 并行逐文件流式解析(session_fallback/候选规则均为文件内状态);
+    // 单文件读取失败警告+err 计数后跳过, 不中止全局统计
+    let per_file: Vec<HashMap<String, Candidate>> =
+        load::map_files(&files, threads, &progress, |file, progress| {
+            let mut candidates: HashMap<String, Candidate> = HashMap::new();
+            let mut session_fallback: Option<String> = None;
+            if let Err(e) = load::for_each_jsonl_progress(file, &[], progress, |value| {
+                if session_fallback.is_none() {
+                    session_fallback = load::str_get(&value, &["sessionId"]).map(str::to_string);
+                }
+                parse_assistant_line(&value, session_fallback.as_deref(), &mut candidates);
+                true
+            }) {
+                load::warn_file(&e);
+                progress.note_error();
             }
-            parse_assistant_line(&value, session_fallback.as_deref(), &mut candidates);
-            true
-        }) {
-            load::warn_file(&e);
+            candidates
+        });
+    progress.finish();
+    // 跨文件合并: 取代规则为 max 语义(stop_reason 优先/同级 output 取大),
+    // 交换律——任意合并序与串行全局 HashMap 逐字一致
+    let mut merged: HashMap<String, Candidate> = HashMap::new();
+    for candidates in per_file {
+        for (msg_id, candidate) in candidates {
+            match merged.entry(msg_id) {
+                Entry::Vacant(vacant) => {
+                    vacant.insert(candidate);
+                }
+                Entry::Occupied(mut occupied) => {
+                    if candidate_should_replace(&candidate, occupied.get()) {
+                        occupied.insert(candidate);
+                    }
+                }
+            }
         }
     }
-    progress.finish();
-    Ok(candidates.into_values().map(|c| c.entry).collect())
+    Ok(merged.into_values().map(|c| c.entry).collect())
+}
+
+/// 取代规则: 有 stop_reason 优先; 同级取 output 大者
+fn candidate_should_replace(new: &Candidate, old: &Candidate) -> bool {
+    (new.has_stop_reason && !old.has_stop_reason)
+        || (new.has_stop_reason == old.has_stop_reason
+            && new.entry.output_tokens > old.entry.output_tokens)
 }
 
 struct Candidate {
@@ -111,11 +144,7 @@ fn parse_assistant_line(
             vacant.insert(candidate);
         }
         Entry::Occupied(mut occupied) => {
-            let existing = occupied.get();
-            let should_replace = (candidate.has_stop_reason && !existing.has_stop_reason)
-                || (candidate.has_stop_reason == existing.has_stop_reason
-                    && candidate.entry.output_tokens > existing.entry.output_tokens);
-            if should_replace {
+            if candidate_should_replace(&candidate, occupied.get()) {
                 occupied.insert(candidate);
             }
         }

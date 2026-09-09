@@ -5,6 +5,49 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const TS: i64 = 1_788_256_800;
 
+/// 确定性排序(HashMap 输出序不定, 比较前排序)
+fn sorted(mut entries: Vec<UsageEntry>) -> Vec<UsageEntry> {
+    entries.sort_by(|x, y| {
+        x.created_at
+            .cmp(&y.created_at)
+            .then(x.model.cmp(&y.model))
+            .then(x.total_tokens().cmp(&y.total_tokens()))
+            .then(x.input_tokens.cmp(&y.input_tokens))
+            .then(x.output_tokens.cmp(&y.output_tokens))
+    });
+    entries
+}
+
+#[test]
+fn test_parallel_scan_deterministic() {
+    let base = temp_dir();
+    write_updates(
+        &base,
+        "sessions",
+        "sess-1",
+        &[turn_line(
+            TS,
+            Some("p1"),
+            &model_usage(&[("grok-4.5-build", counters(100, 10, 5))]),
+        )],
+    );
+    write_updates(
+        &base,
+        "archived_sessions",
+        "sess-2",
+        &[turn_line(
+            TS + 60,
+            Some("p2"),
+            &model_usage(&[("grok-4.5-build", counters(200, 20, 0))]),
+        )],
+    );
+    let one = sorted(collect_from_with(&base, Some(1)).unwrap());
+    let four = sorted(collect_from_with(&base, Some(4)).unwrap());
+    assert_eq!(one, four);
+    assert_eq!(four.len(), 2);
+    fs::remove_dir_all(&base).ok();
+}
+
 fn temp_dir() -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
         "tokrs-grok-{}-{}",

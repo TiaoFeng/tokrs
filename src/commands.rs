@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 use crate::{
     apps,
     error::AppError,
-    io::cli_print,
+    io::{cli_print, load},
     model::{AppKind, TokenTotals, UsageEntry},
     tokens,
 };
@@ -52,6 +52,28 @@ pub struct Cli {
     until: Option<NaiveDate>,
     #[arg(long, help = "Output in JSON format")]
     json: bool,
+    #[arg(
+        long,
+        help = "Scan threads per app (default: min(CPU cores, 16, file count); 0 = default; >16 clamped to 16 with a warning; invalid values are rejected by the CLI parser)"
+    )]
+    threads: Option<usize>,
+}
+
+/// 解析 --threads: 0/缺省 → auto; 超上限提示后收敛(意图明确的越界, 资源保护);
+/// 负数/非数字由 clap 原生报错终止——显式 CLI 参数是用户意图, fail-fast
+/// (与"数据文件失败警告继续"分层: 环境不可控 vs 意图传错, 见 AGENTS.md)
+fn resolve_threads(raw: Option<usize>) -> Option<usize> {
+    match raw {
+        None | Some(0) => None,
+        Some(n) if n > load::MAX_THREADS => {
+            eprintln!(
+                "> --threads={n} 超过上限 {}, 已按上限执行",
+                load::MAX_THREADS
+            );
+            Some(load::MAX_THREADS)
+        }
+        Some(n) => Some(n),
+    }
 }
 
 /// cli运行函数
@@ -67,7 +89,7 @@ pub fn run(cli: Cli) -> Result<(), AppError> {
             .collect()
     };
 
-    let mut entries = apps::collect(&app_kinds)?;
+    let mut entries = apps::collect(&app_kinds, resolve_threads(cli.threads))?;
     // 价目表: 损坏直接报错不回写; 未覆盖模型自动追加 null 模板(用全量模型, 先于日期过滤)
     let pricing_path = apps::prince::pricing_path()?;
     let mut table = apps::prince::load_pricing(&pricing_path)?;

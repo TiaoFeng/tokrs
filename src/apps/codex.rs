@@ -61,7 +61,7 @@ const TOKEN_FIELDS: [&str; 7] = [
     "total_tokens",
 ];
 
-pub fn collect() -> Result<Vec<UsageEntry>, AppError> {
+pub fn collect(threads: Option<usize>) -> Result<Vec<UsageEntry>, AppError> {
     let base = codex_base(
         &load::home_dir()?,
         std::env::var_os("CODEX_HOME").as_deref(),
@@ -69,10 +69,16 @@ pub fn collect() -> Result<Vec<UsageEntry>, AppError> {
     if !base.is_dir() {
         return Ok(Vec::new());
     }
-    collect_from(&base)
+    collect_from_with(&base, threads)
 }
 
+/// 测试便捷入口(auto 线程); 生产路径经 collect(threads)
+#[cfg(test)]
 pub fn collect_from(base: &Path) -> Result<Vec<UsageEntry>, AppError> {
+    collect_from_with(base, None)
+}
+
+fn collect_from_with(base: &Path, threads: Option<usize>) -> Result<Vec<UsageEntry>, AppError> {
     let mut files = load::discover_files(&base.join("sessions"), "jsonl", SESSIONS_MAX_DEPTH);
     files.extend(load::discover_files(
         &base.join("archived_sessions"),
@@ -82,19 +88,26 @@ pub fn collect_from(base: &Path) -> Result<Vec<UsageEntry>, AppError> {
     files.retain(|f| is_rollout_filename(f));
     let files = dedupe_by_filename(files);
 
-    // Pass 1: 逐文件解析 meta 与 token 事件(文件内去重与 delta 计算在此完成);
-    // 进度条覆盖本 pass(emit 为纯内存, 瞬时);
-    // 单文件读取失败警告后跳过, 不中止全局统计
-    let mut parsed: Vec<ParsedFile> = Vec::with_capacity(files.len());
-    let mut progress = Progress::start("codex", load::total_bytes(&files));
-    for file in &files {
-        progress.set_file(load::file_name_str(file));
-        match parse_file(file, &mut progress) {
-            Ok(parsed_file) => parsed.push(parsed_file),
-            Err(e) => load::warn_file(&e),
-        }
-    }
+    let threads = threads.unwrap_or_else(|| load::auto_threads(files.len()));
+    // Pass 1 并行: 逐文件解析 meta 与 token 事件(文件内去重与 delta 计算均为
+    // 文件内状态); 单文件读取失败警告+err 计数后该槽位为 None(不进时间线,
+    // 与串行"跳过该文件"逐字等价); 进度条覆盖本 pass(emit 为纯内存, 瞬时)
+    let progress = Progress::start("codex", load::total_bytes(&files), files.len());
+    let parsed: Vec<Option<ParsedFile>> = load::map_files(
+        &files,
+        threads,
+        &progress,
+        |file, progress| match parse_file(file, progress) {
+            Ok(parsed) => Some(parsed),
+            Err(e) => {
+                load::warn_file(&e);
+                progress.note_error();
+                None
+            }
+        },
+    );
     progress.finish();
+    let parsed: Vec<ParsedFile> = parsed.into_iter().flatten().collect();
 
     // Pass 2: 以文件名 uuid 汇总父时间线, fork 回放段跳过后入账
     let timelines = build_timelines(&parsed);
@@ -265,7 +278,7 @@ struct ParseState {
 /// 三类事件(字节串不含转义), 其余零分配跳过(对齐 cc-switch 的 substring 快筛)
 const CODEX_LINE_NEEDLES: [&str; 3] = ["\"session_meta\"", "\"turn_context\"", "\"token_count\""];
 
-fn parse_file(file: &Path, progress: &mut Progress) -> Result<ParsedFile, AppError> {
+fn parse_file(file: &Path, progress: &Progress) -> Result<ParsedFile, AppError> {
     let mut meta: Option<MetaInfo> = None;
     let mut state = ParseState::default();
     let mut events = Vec::new();

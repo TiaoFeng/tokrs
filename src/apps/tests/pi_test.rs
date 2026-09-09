@@ -346,6 +346,57 @@ fn test_session_roots_resolution() {
     );
 }
 
+/// 确定性排序(HashMap 输出序不定, 比较前排序)
+fn sorted(mut entries: Vec<UsageEntry>) -> Vec<UsageEntry> {
+    entries.sort_by(|x, y| {
+        x.created_at
+            .cmp(&y.created_at)
+            .then(x.model.cmp(&y.model))
+            .then(x.total_tokens().cmp(&y.total_tokens()))
+            .then(x.input_tokens.cmp(&y.input_tokens))
+            .then(x.output_tokens.cmp(&y.output_tokens))
+    });
+    entries
+}
+
+#[test]
+fn test_parallel_scan_deterministic() {
+    let base = temp_dir();
+    write_file(
+        &base,
+        "s1.jsonl",
+        &[
+            header("s-1", TS),
+            message_entry(
+                Some("a1"),
+                TS,
+                "assistant",
+                &model_field("m1"),
+                &usage_json(100, 10, 5, 0),
+            ),
+        ],
+    );
+    write_file(
+        &base,
+        "s2.jsonl",
+        &[
+            header("s-2", TS + 60),
+            message_entry(
+                Some("a2"),
+                TS + 60,
+                "assistant",
+                &model_field("m2"),
+                &usage_json(200, 20, 0, 0),
+            ),
+        ],
+    );
+    let one = sorted(collect_from_with(std::slice::from_ref(&base), Some(1)).unwrap());
+    let four = sorted(collect_from_with(std::slice::from_ref(&base), Some(4)).unwrap());
+    assert_eq!(one, four);
+    assert_eq!(four.len(), 2);
+    fs::remove_dir_all(&base).ok();
+}
+
 #[test]
 fn test_model_normalization() {
     let base = temp_dir();

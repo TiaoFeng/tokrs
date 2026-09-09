@@ -58,3 +58,16 @@ fn test_build_rows_by_day() {
     assert_eq!(rows[0].1.requests, 2);
     assert_eq!(rows[1].0, "2026-09-03");
 }
+
+#[test]
+fn test_resolve_threads() {
+    // 缺省/0 → auto(None)
+    assert_eq!(resolve_threads(None), None);
+    assert_eq!(resolve_threads(Some(0)), None);
+    // 合法范围直用
+    assert_eq!(resolve_threads(Some(1)), Some(1));
+    assert_eq!(resolve_threads(Some(16)), Some(16));
+    // 超上限: 提示后收敛(意图明确的越界, 资源保护)
+    assert_eq!(resolve_threads(Some(120000)), Some(16));
+    // 负数/非数字由 clap 原生报错终止(见 resolve_threads 文档), 不进入本函数
+}

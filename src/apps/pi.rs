@@ -42,18 +42,26 @@ fn session_roots(
     roots
 }
 
-pub fn collect() -> Result<Vec<UsageEntry>, AppError> {
+pub fn collect(threads: Option<usize>) -> Result<Vec<UsageEntry>, AppError> {
     let home = load::home_dir()?;
     let roots = session_roots(
         &home,
         std::env::var_os("PI_CODING_AGENT_SESSION_DIR").as_deref(),
         std::env::var_os("PI_CODING_AGENT_DIR").as_deref(),
     );
-    collect_from(&roots)
+    collect_from_with(&roots, threads)
 }
 
+/// 测试便捷入口(auto 线程); 生产路径经 collect(threads)
+#[cfg(test)]
 pub fn collect_from(roots: &[PathBuf]) -> Result<Vec<UsageEntry>, AppError> {
-    let mut candidates: HashMap<String, UsageEntry> = HashMap::new();
+    collect_from_with(roots, None)
+}
+
+fn collect_from_with(
+    roots: &[PathBuf],
+    threads: Option<usize>,
+) -> Result<Vec<UsageEntry>, AppError> {
     let mut seen_files = std::collections::HashSet::new();
     let mut files: Vec<PathBuf> = Vec::new();
     for root in roots {
@@ -64,26 +72,33 @@ pub fn collect_from(roots: &[PathBuf]) -> Result<Vec<UsageEntry>, AppError> {
             }
         }
     }
-    let mut progress = Progress::start("pi", load::total_bytes(&files));
-    for file in &files {
-        progress.set_file(load::file_name_str(file));
-        parse_session(file, &mut progress, &mut candidates);
-    }
+    let threads = threads.unwrap_or_else(|| load::auto_threads(files.len()));
+    let progress = Progress::start("pi", load::total_bytes(&files), files.len());
+    // 并行逐文件解析(header 检查/session_id/时间戳回退均为文件内状态);
+    // 单文件读取失败警告+err 计数后该文件不计, 不中止全局
+    let per_file: Vec<HashMap<String, UsageEntry>> =
+        load::map_files(&files, threads, &progress, parse_session);
     progress.finish();
+    // 合并: 按文件序 last-wins(fork/恢复的重复条目去重, files 确定性排序,
+    // 与串行单全局 map 逐字一致)
+    let mut candidates: HashMap<String, UsageEntry> = HashMap::new();
+    for map in per_file {
+        for (key, entry) in map {
+            candidates.insert(key, entry);
+        }
+    }
     Ok(candidates.into_values().collect())
 }
 
-fn parse_session(
-    file: &Path,
-    progress: &mut Progress,
-    candidates: &mut HashMap<String, UsageEntry>,
-) {
+/// 解析单个会话文件: 返回该文件的去重表(kind:entry.id|内容哈希 → entry)
+fn parse_session(file: &Path, progress: &Progress) -> HashMap<String, UsageEntry> {
+    let mut candidates: HashMap<String, UsageEntry> = HashMap::new();
     let mut first_seen = false;
     let mut session_id = "unknown".to_string();
     let mut header_ts: Option<i64> = None;
     // 首条有效 JSON 必须是 session header(畸形行已被流式过滤, 对齐参考实现);
     // 首条非 header 则整文件跳过(回调返回 false 提前终止)。
-    // 单文件读取失败警告后跳过(不中止全局); 逐行流式防 GB 级文件整读驻留
+    // 单文件读取失败警告+err 计数后跳过(不中止全局); 逐行流式防 GB 级文件整读驻留
     if let Err(e) = load::for_each_jsonl_progress(file, &[], progress, |entry| {
         if !first_seen {
             first_seen = true;
@@ -102,7 +117,9 @@ fn parse_session(
         true
     }) {
         load::warn_file(&e);
+        progress.note_error();
     }
+    candidates
 }
 
 fn parse_entry(

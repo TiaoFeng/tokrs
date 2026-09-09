@@ -28,17 +28,21 @@ use crate::{
 
 const MAX_DEPTH: usize = 3;
 
-pub fn collect() -> Result<Vec<UsageEntry>, AppError> {
+pub fn collect(threads: Option<usize>) -> Result<Vec<UsageEntry>, AppError> {
     let base = load::home_dir()?.join(".gemini").join("tmp");
     if !base.is_dir() {
         return Ok(Vec::new());
     }
-    collect_from(&base)
+    collect_from_with(&base, threads)
 }
 
+/// 测试便捷入口(auto 线程); 生产路径经 collect(threads)
+#[cfg(test)]
 pub fn collect_from(base: &Path) -> Result<Vec<UsageEntry>, AppError> {
-    // 全局去重键: session_id:msg_key(后出现者覆盖, 对应 cc-switch 的 UPSERT 语义)
-    let mut candidates: HashMap<String, UsageEntry> = HashMap::new();
+    collect_from_with(base, None)
+}
+
+fn collect_from_with(base: &Path, threads: Option<usize>) -> Result<Vec<UsageEntry>, AppError> {
     let mut files = Vec::new();
     for file in load::discover_files(base, "json", MAX_DEPTH) {
         let name = load::file_name_str(&file);
@@ -46,29 +50,45 @@ pub fn collect_from(base: &Path) -> Result<Vec<UsageEntry>, AppError> {
             files.push(file);
         }
     }
-    let mut progress = Progress::start("gemini", load::total_bytes(&files));
-    for file in &files {
-        progress.set_file(load::file_name_str(file));
-        // 单个文件损坏/不可读警告后跳过, 不中断整体收集(staging 随之丢弃, 整体不计)
-        if let Err(e) = stream_session(file, &mut progress, &mut candidates) {
-            load::warn_file(&e);
+    let threads = threads.unwrap_or_else(|| load::auto_threads(files.len()));
+    let progress = Progress::start("gemini", load::total_bytes(&files), files.len());
+    // 并行逐文件流式解析(文件内 staging, 峰值 O(单条消息));
+    // 损坏/不可读文件警告+err 计数后整体不计(staging 丢弃), 不中断其它文件
+    let per_file: Vec<(String, HashMap<String, UsageEntry>)> = load::map_files(
+        &files,
+        threads,
+        &progress,
+        |file, progress| match stream_session(file, progress) {
+            Ok(staged) => staged,
+            Err(e) => {
+                load::warn_file(&e);
+                progress.note_error();
+                ("unknown".to_string(), HashMap::new())
+            }
+        },
+    );
+    progress.finish();
+    // 合并: 按文件序 last-wins(与串行单全局 map 逐字一致, files 已确定性排序)
+    let mut candidates: HashMap<String, UsageEntry> = HashMap::new();
+    for (sid, staged) in per_file {
+        for (msg_key, mut entry) in staged {
+            entry.session_id = Some(sid.clone());
+            candidates.insert(format!("{sid}:{msg_key}"), entry);
         }
     }
-    progress.finish();
     Ok(candidates.into_values().collect())
 }
 
 /// 流式解析单个 session 文件: 顶层对象逐 key 消费, messages 数组逐条瞬态处理
 ///
-/// 文件内 staging 解决键序问题: messages 先于 sessionId 出现时逐条消息尚不知道
-/// session_id, 故先按 msg_key 收集, 流读完统一拼 `{session_id}:` 前缀入全局表
+/// 返回 (session_id, 文件内 staging): messages 先于 sessionId 出现时逐条消息
+/// 尚不知道 session_id, 故先按 msg_key 收集, 流读完由调用方统一拼键合并
 fn stream_session(
     file: &Path,
-    progress: &mut Progress,
-    candidates: &mut HashMap<String, UsageEntry>,
-) -> Result<(), AppError> {
+    progress: &Progress,
+) -> Result<(String, HashMap<String, UsageEntry>), AppError> {
     let f = fs::File::open(file).map_err(|e| io_err("open", file, e))?;
-    let reader = load::ProgressReader::new(std::io::BufReader::new(f), progress);
+    let reader = load::ProgressReader::new(std::io::BufReader::new(f), progress.clone());
     let mut de = serde_json::Deserializer::from_reader(reader);
     let mut session_id: Option<String> = None;
     let mut staged: HashMap<String, UsageEntry> = HashMap::new();
@@ -79,11 +99,7 @@ fn stream_session(
     .map_err(|e| json_err(file, e))?;
     // 至此完整解析成功; 非 gemini 消息/全零消息不会进入 staging
     let sid = session_id.unwrap_or_else(|| "unknown".to_string());
-    for (msg_key, mut entry) in staged {
-        entry.session_id = Some(sid.clone());
-        candidates.insert(format!("{sid}:{msg_key}"), entry);
-    }
-    Ok(())
+    Ok((sid, staged))
 }
 
 /// 顶层对象 visitor: 只保留 sessionId, messages 逐条瞬态处理, 其余字段忽略

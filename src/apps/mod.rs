@@ -62,17 +62,22 @@ pub fn value_hash(value: &Value) -> u64 {
     hasher.finish()
 }
 
-pub fn collect(apps: &[AppKind]) -> Result<Vec<UsageEntry>, AppError> {
+/// 汇总各 app 用量条目
+///
+/// threads: 每个文件型 app 内部的并行解析线程数(None = auto:
+/// min(逻辑核数, 16, 文件数), 见 io/load::auto_threads); 跨 app 串行;
+/// opencode 单 DB 查询无文件流, 忽略该参数
+pub fn collect(apps: &[AppKind], threads: Option<usize>) -> Result<Vec<UsageEntry>, AppError> {
     let mut entries = Vec::new();
     for &app in apps {
         match app {
-            AppKind::Claude => entries.extend(claude::collect()?),
-            AppKind::Codex => entries.extend(codex::collect()?),
+            AppKind::Claude => entries.extend(claude::collect(threads)?),
+            AppKind::Codex => entries.extend(codex::collect(threads)?),
             AppKind::OpenCode => entries.extend(opencode::collect()?),
-            AppKind::Gemini => entries.extend(gemini::collect()?),
-            AppKind::Grok => entries.extend(grok::collect()?),
-            AppKind::Pi => entries.extend(pi::collect()?),
-            AppKind::Kimi => entries.extend(kimi::collect()?),
+            AppKind::Gemini => entries.extend(gemini::collect(threads)?),
+            AppKind::Grok => entries.extend(grok::collect(threads)?),
+            AppKind::Pi => entries.extend(pi::collect(threads)?),
+            AppKind::Kimi => entries.extend(kimi::collect(threads)?),
         }
     }
     Ok(entries)

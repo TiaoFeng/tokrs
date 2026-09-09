@@ -3,7 +3,8 @@
 //! 日志文件可达 GB 级: 所有读取均为流式(逐行/逐块), 峰值内存 O(单行),
 //! 修改原本的读取逻辑(整读 + DOM 驻留会耗尽内存)
 //! 单文件失败统一 warn_file 警告后跳过(不中止全局); 单对象文件(如 gemini
-//! session)经 ProgressReader + serde Visitor 流式逐条解析(峰值 O(单条消息))
+//! session)经 ProgressReader + serde Visitor 流式逐条解析(峰值 O(单条消息));
+//! 文件级并行扫描(map_files: 原子索引抢占 + 结果按序回填, 合并语义与串行一致)
 //!
 use serde_json::Value;
 use std::{
@@ -11,6 +12,8 @@ use std::{
     fs,
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
+    sync::Mutex,
+    sync::atomic::{AtomicUsize, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -116,7 +119,7 @@ const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
 pub fn for_each_jsonl_progress(
     path: &Path,
     needles: &[&str],
-    progress: &mut Progress,
+    progress: &Progress,
     on_line: impl FnMut(Value) -> bool,
 ) -> Result<(), AppError> {
     for_each_jsonl_impl(path, needles, MAX_LINE_BYTES, Some(progress), on_line)
@@ -134,7 +137,7 @@ fn for_each_jsonl_impl(
     path: &Path,
     needles: &[&str],
     max_line: usize,
-    mut progress: Option<&mut Progress>,
+    progress: Option<&Progress>,
     mut on_line: impl FnMut(Value) -> bool,
 ) -> Result<(), AppError> {
     let file = fs::File::open(path).map_err(|e| io_err("open", path, e))?;
@@ -166,7 +169,7 @@ fn for_each_jsonl_impl(
                         oversized = true;
                     }
                     reader.consume(nl + 1);
-                    if let Some(p) = &mut progress {
+                    if let Some(p) = progress {
                         p.add((nl + 1) as u64);
                     }
                 }
@@ -178,7 +181,7 @@ fn for_each_jsonl_impl(
                     }
                     let len = buf.len();
                     reader.consume(len);
-                    if let Some(p) = &mut progress {
+                    if let Some(p) = progress {
                         p.add(len as u64);
                     }
                     continue; // 行未结束, 继续读
@@ -242,6 +245,68 @@ fn contains_needle(line: &[u8], needle: &[u8]) -> bool {
     false
 }
 
+/// 并行扫描线程数上限(命令层 --threads 与内核共用同一上界, 消除魔数)
+///
+/// 解析+页缓存读的并行收益在 ~8-16 线程后趋平; 同时限制最坏内存
+/// (线程数 × 单文件峰值, 单行缓冲上限 16MiB)
+pub const MAX_THREADS: usize = 16;
+
+/// 并行默认线程数: min(CPU 逻辑核数, MAX_THREADS, 文件数)
+///
+/// 文件数少时避免空转线程
+pub fn auto_threads(files: usize) -> usize {
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+    cores.min(MAX_THREADS).clamp(1, files.max(1))
+}
+
+/// 文件级并行解析内核(零新依赖, std::thread::scope)
+///
+/// workers 经原子索引动态抢占下一个文件(单巨文件不阻塞其它文件), 结果按
+/// (idx, T) 收集, join 后按 idx 重排——构造性有序, 各 app 跨文件合并语义
+/// (last-wins/first-wins/交换律)与串行执行逐字一致;
+/// threads 会被 min(文件数) 截断, <=1 时直接顺序执行(等价串行路径, 无线程开销);
+/// 进度: 每个文件完成即 file_done(), 字节由解析闭包内部经 progress.add 上报;
+/// 解析闭包须无跨文件可变状态(各 app 的文件内状态均在闭包内创建)
+pub fn map_files<T, F>(files: &[PathBuf], threads: usize, progress: &Progress, parse: F) -> Vec<T>
+where
+    F: Fn(&Path, &Progress) -> T + Sync,
+    T: Send,
+{
+    let workers = threads.max(1).min(files.len());
+    if workers <= 1 {
+        return files
+            .iter()
+            .map(|file| {
+                let out = parse(file, progress);
+                progress.file_done();
+                out
+            })
+            .collect();
+    }
+    let next = AtomicUsize::new(0);
+    let results: Mutex<Vec<(usize, T)>> = Mutex::new(Vec::with_capacity(files.len()));
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| {
+                loop {
+                    let idx = next.fetch_add(1, Ordering::Relaxed);
+                    if idx >= files.len() {
+                        break;
+                    }
+                    let out = parse(&files[idx], progress);
+                    progress.file_done();
+                    results.lock().unwrap().push((idx, out));
+                }
+            });
+        }
+    });
+    let mut slots: Vec<Option<T>> = (0..files.len()).map(|_| None).collect();
+    for (idx, out) in results.into_inner().unwrap() {
+        slots[idx] = Some(out);
+    }
+    slots.into_iter().map(Option::unwrap).collect()
+}
+
 /// 文件列表总字节(进度条总量; metadata 失败按 0 计)
 pub fn total_bytes(files: &[PathBuf]) -> u64 {
     files
@@ -266,19 +331,20 @@ pub fn warn_file(err: &AppError) {
 /// 进度感知 reader: 每读到一段字节即向 progress 上报
 ///
 /// 用于无法逐行流式的单一对象文件(如 gemini 的 session JSON):
-/// 配合 serde_json Deserializer::from_reader(IoRead 真流式)实现字节驱动进度
-pub struct ProgressReader<'a, R: Read> {
+/// 配合 serde_json Deserializer::from_reader(IoRead 真流式)实现字节驱动进度;
+/// Progress 为廉价 Clone 句柄(Arc<Mutex>), 按值持有
+pub struct ProgressReader<R> {
     inner: R,
-    progress: &'a mut Progress,
+    progress: Progress,
 }
 
-impl<'a, R: Read> ProgressReader<'a, R> {
-    pub fn new(inner: R, progress: &'a mut Progress) -> ProgressReader<'a, R> {
+impl<R: Read> ProgressReader<R> {
+    pub fn new(inner: R, progress: Progress) -> Self {
         ProgressReader { inner, progress }
     }
 }
 
-impl<R: Read> Read for ProgressReader<'_, R> {
+impl<R: Read> Read for ProgressReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let n = self.inner.read(buf)?;
         self.progress.add(n as u64);

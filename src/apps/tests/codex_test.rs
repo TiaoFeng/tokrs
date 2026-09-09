@@ -146,6 +146,50 @@ fn test_unreadable_file_warns_and_continues() {
     fs::remove_dir_all(&base).ok();
 }
 
+/// 确定性排序(HashMap 输出序不定, 比较前排序)
+fn sorted(mut entries: Vec<UsageEntry>) -> Vec<UsageEntry> {
+    entries.sort_by(|x, y| {
+        x.created_at
+            .cmp(&y.created_at)
+            .then(x.model.cmp(&y.model))
+            .then(x.total_tokens().cmp(&y.total_tokens()))
+            .then(x.input_tokens.cmp(&y.input_tokens))
+            .then(x.output_tokens.cmp(&y.output_tokens))
+    });
+    entries
+}
+
+#[test]
+fn test_parallel_scan_deterministic() {
+    let base = temp_base();
+    write_rollout(
+        &base,
+        "sessions/2026/09/04/rollout-2026-09-04T13-58-05-11111111-2222-3333-4444-555555555555.jsonl",
+        &[
+            meta_line(),
+            token_count_line("2026-09-04T06:00:00Z", None, Some((100, 50, 0, 10)), None),
+        ],
+    );
+    write_rollout(
+        &base,
+        "sessions/2026/09/04/rollout-2026-09-04T14-00-00-99999999-8888-7777-6666-555555555555.jsonl",
+        &[
+            meta_line_for(CHILD_ID),
+            token_count_line(
+                "2026-09-04T06:01:00Z",
+                Some((200, 100, 0, 20)),
+                None,
+                Some("gpt-5"),
+            ),
+        ],
+    );
+    let one = sorted(collect_from_with(&base, Some(1)).unwrap());
+    let four = sorted(collect_from_with(&base, Some(4)).unwrap());
+    assert_eq!(one, four);
+    assert_eq!(four.len(), 2);
+    fs::remove_dir_all(&base).ok();
+}
+
 #[test]
 fn test_last_token_usage_wins_and_duplicates_skipped() {
     let base = temp_base();

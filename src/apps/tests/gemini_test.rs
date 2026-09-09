@@ -294,6 +294,48 @@ fn test_non_object_and_null_messages_skipped() {
     fs::remove_dir_all(&base).ok();
 }
 
+/// 确定性排序(HashMap 输出序不定, 比较前排序)
+fn sorted(mut entries: Vec<UsageEntry>) -> Vec<UsageEntry> {
+    entries.sort_by(|x, y| {
+        x.created_at
+            .cmp(&y.created_at)
+            .then(x.model.cmp(&y.model))
+            .then(x.total_tokens().cmp(&y.total_tokens()))
+            .then(x.input_tokens.cmp(&y.input_tokens))
+            .then(x.output_tokens.cmp(&y.output_tokens))
+    });
+    entries
+}
+
+#[test]
+fn test_parallel_scan_deterministic() {
+    let base = temp_dir();
+    write_session(
+        &base,
+        "p1",
+        "session-1.json",
+        &session_json(
+            "s1",
+            &[
+                gemini_msg("m1", "x", 1, 1, 0, 0),
+                gemini_msg("m2", "x", 2, 2, 0, 0),
+            ],
+        ),
+    );
+    write_session(
+        &base,
+        "p2",
+        "session-2.json",
+        &session_json("s2", &[gemini_msg("m1", "y", 5, 5, 0, 0)]),
+    );
+    let one = sorted(collect_from_with(&base, Some(1)).unwrap());
+    let four = sorted(collect_from_with(&base, Some(4)).unwrap());
+    assert_eq!(one, four);
+    // 跨文件同 id 不同 session 不合并 → 3 条
+    assert_eq!(four.len(), 3);
+    fs::remove_dir_all(&base).ok();
+}
+
 #[test]
 fn test_model_normalization() {
     let base = temp_dir();
