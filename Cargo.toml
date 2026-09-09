@@ -16,6 +16,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 comfy-table = "8.0.0"
+zstd = "0.14.0"
 
 # The profile that 'dist' will build with
 [profile.dist]

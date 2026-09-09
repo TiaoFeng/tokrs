@@ -17,10 +17,11 @@ pub enum AppKind {
     Grok,
     Pi,
     Kimi,
+    Dsh,
 }
 
 impl AppKind {
-    pub const ALL: [AppKind; 7] = [
+    pub const ALL: [AppKind; 8] = [
         AppKind::Claude,
         AppKind::Codex,
         AppKind::OpenCode,
@@ -28,6 +29,7 @@ impl AppKind {
         AppKind::Grok,
         AppKind::Pi,
         AppKind::Kimi,
+        AppKind::Dsh,
     ];
 
     pub fn as_str(&self) -> &'static str {
@@ -39,6 +41,7 @@ impl AppKind {
             AppKind::Grok => "grok",
             AppKind::Pi => "pi",
             AppKind::Kimi => "kimi",
+            AppKind::Dsh => "dsh",
         }
     }
 }

@@ -4,6 +4,7 @@
 //! 修改原本的读取逻辑(整读 + DOM 驻留会耗尽内存)
 //! 单文件失败统一 warn_file 警告后跳过(不中止全局); 单对象文件(如 gemini
 //! session)经 ProgressReader + serde Visitor 流式逐条解析(峰值 O(单条消息));
+//! zstd 压缩 JSONL(如 dsh)流式解压逐行解析, 进度按压缩字节推进;
 //! 文件级并行扫描(map_files: 原子索引抢占 + 结果按序回填, 合并语义与串行一致)
 //!
 use serde_json::Value;
@@ -143,15 +144,33 @@ pub fn for_each_jsonl_progress(
 /// - 行超过 max_line 整行跳过并每文件警告一次, 继续消费到换行为止
 /// - 畸形行/无效 UTF-8 行跳过(from_slice 语义与整读版逐字一致, 含 CRLF/末行无换行)
 /// - 文件打开/读失败返回 Err; 回调返回 false 提前终止
+/// - 进度按消费字节批报(与磁盘字节 1:1); zstd 压缩变体见
+///   for_each_jsonl_zstd_progress(进度按压缩字节)
 fn for_each_jsonl_impl(
     path: &Path,
     needles: &[&str],
     max_line: usize,
     progress: Option<&Progress>,
-    mut on_line: impl FnMut(Value) -> bool,
+    on_line: impl FnMut(Value) -> bool,
 ) -> Result<(), AppError> {
     let file = fs::File::open(path).map_err(|e| io_err("open", path, e))?;
-    let mut reader = BufReader::with_capacity(64 * 1024, file);
+    for_each_line_core(path, file, needles, max_line, progress, on_line)
+}
+
+/// 行循环核心(私有): plain 与 zstd 两条入口共享
+///
+/// reader 为已就绪的原始流, 核心内部套 64KB BufReader 后逐行消费;
+/// 进度语义: plain 入口的消费字节=磁盘字节, 按阈值批报; zstd 入口传 None
+/// (解压后字节与磁盘口径不符, 进度由压缩字节计数包装层负责)
+fn for_each_line_core<R: Read>(
+    path: &Path,
+    reader: R,
+    needles: &[&str],
+    max_line: usize,
+    progress: Option<&Progress>,
+    mut on_line: impl FnMut(Value) -> bool,
+) -> Result<(), AppError> {
+    let mut reader = BufReader::with_capacity(64 * 1024, reader);
     let mut line: Vec<u8> = Vec::new();
     let mut warned = false;
     // needle 过滤门闩: 首条成功解析的行之前不过滤(见函数文档)
@@ -243,6 +262,72 @@ fn for_each_jsonl_impl(
                 }
                 return Ok(());
             }
+        }
+    }
+}
+
+/// zstd 压缩 JSONL 流式逐行读取(dsh 用)
+///
+/// - 流式解压(zstd Decoder 逐块, 峰值 O(行), 禁止整读解压驻留), 行语义与
+///   for_each_jsonl 逐字一致(needle 过滤/首行不过滤/16MiB 行上限/早停)
+/// - 进度按**压缩字节**推进(与 total_bytes 的磁盘大小口径一致): 计数包装在
+///   BufRead consume 处精确计数, 64KB 阈值批报 + Drop 冲账; decoder 收尾
+///   预读可能使 done 略超 total, draw_frame 已有 done.min(total) 兜底
+/// - 须用 Decoder::with_buffer(直接包装计数层的 BufRead): Decoder::new 会
+///   自插一层 BufReader(in_size), zio 的 fill_buf/consume 打在该中间层上,
+///   计数层的 consume 永远不被调用 → 进度恒 0B
+/// - 中途解压/读失败返回 Err(调用方警告后保留已解析条目, 对齐 claude/kimi)
+pub fn for_each_jsonl_zstd_progress(
+    path: &Path,
+    needles: &[&str],
+    progress: &Progress,
+    on_line: impl FnMut(Value) -> bool,
+) -> Result<(), AppError> {
+    let file = fs::File::open(path).map_err(|e| io_err("open", path, e))?;
+    let counting = CountingProgressRead {
+        inner: BufReader::with_capacity(64 * 1024, file),
+        progress: progress.clone(),
+        pending: 0,
+    };
+    let decoder =
+        zstd::Decoder::with_buffer(counting).map_err(|e| io_err("zstd decode", path, e))?;
+    for_each_line_core(path, decoder, needles, MAX_LINE_BYTES, None, on_line)
+}
+
+/// 压缩字节计数 reader(私有): 在 BufRead consume 处精确计数已消费的底层
+/// (压缩)字节, 64KB 阈值批报 + Drop 冲账(对齐 ProgressReader); fill_buf
+/// 不计数(decode 未必消费满), consume 为权威口径
+struct CountingProgressRead<R> {
+    inner: R,
+    progress: Progress,
+    pending: u64,
+}
+
+impl<R: BufRead> Read for CountingProgressRead<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.inner.read(buf)
+    }
+}
+
+impl<R: BufRead> BufRead for CountingProgressRead<R> {
+    fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+        self.inner.fill_buf()
+    }
+
+    fn consume(&mut self, amt: usize) {
+        self.pending += amt as u64;
+        if self.pending >= PROGRESS_REPORT_CHUNK {
+            self.progress.add(std::mem::take(&mut self.pending));
+        }
+        self.inner.consume(amt);
+    }
+}
+
+impl<R> Drop for CountingProgressRead<R> {
+    fn drop(&mut self) {
+        // 正常读完/中途放弃时冲账剩余(读取错误路径同理, 纯外观欠账)
+        if self.pending > 0 {
+            self.progress.add(std::mem::take(&mut self.pending));
         }
     }
 }

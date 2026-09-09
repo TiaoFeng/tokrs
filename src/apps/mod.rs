@@ -1,5 +1,6 @@
 pub mod claude;
 pub mod codex;
+pub mod dsh;
 pub mod gemini;
 pub mod grok;
 pub mod kimi;
@@ -78,6 +79,7 @@ pub fn collect(apps: &[AppKind], threads: Option<usize>) -> Result<Vec<UsageEntr
             AppKind::Grok => entries.extend(grok::collect(threads)?),
             AppKind::Pi => entries.extend(pi::collect(threads)?),
             AppKind::Kimi => entries.extend(kimi::collect(threads)?),
+            AppKind::Dsh => entries.extend(dsh::collect(threads)?),
         }
     }
     Ok(entries)
