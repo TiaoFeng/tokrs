@@ -5,7 +5,8 @@
 //!
 //! 流式解析: serde_json Deserializer::from_reader(IoRead 逐块) + 自定义 Visitor,
 //! messages 数组逐条取出瞬态处理(峰值内存 O(单条消息), 不整读 DOM, 文件可达任意大),
-//! 其余字段 IgnoredAny 跳过; ProgressReader 逐块上报字节保持进度条字节驱动
+//! 其余字段 IgnoredAny 跳过; ProgressReader 按阈值批报字节(Drop 冲账)保持
+//! 进度条字节驱动
 //! sessionId 与 messages 的键序不假设: 先文件内 staging(HashMap<msg_key, entry>),
 //! 流读完统一补 session_id 并拼前缀入全局表, 去重语义与整读版逐字一致
 //! 只统计 type=="gemini" 的消息; thoughts 并入 output; input 含 cached 已扣除归一
@@ -88,7 +89,11 @@ fn stream_session(
     progress: &Progress,
 ) -> Result<(String, HashMap<String, UsageEntry>), AppError> {
     let f = fs::File::open(file).map_err(|e| io_err("open", file, e))?;
-    let reader = load::ProgressReader::new(std::io::BufReader::new(f), progress.clone());
+    // 64KB 缓冲对齐 JSONL 读取端(load::for_each_jsonl_impl): GB 级文件摊薄 syscall
+    let reader = load::ProgressReader::new(
+        std::io::BufReader::with_capacity(64 * 1024, f),
+        progress.clone(),
+    );
     let mut de = serde_json::Deserializer::from_reader(reader);
     let mut session_id: Option<String> = None;
     let mut staged: HashMap<String, UsageEntry> = HashMap::new();
