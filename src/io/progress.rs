@@ -53,18 +53,26 @@ impl Progress {
         }
     }
 
-    /// 累计已消费字节数(内部节流重绘)
+    /// 累计已消费字节数(内部节流重绘; 非 TTY 仅计数, 跳过节流时钟与重绘)
     pub fn add(&self, bytes: u64) {
-        let throttled = {
-            let mut inner = self.inner.lock().expect("progress mutex poisoned");
-            inner.done += bytes;
-            inner
-                .last_render
-                .is_some_and(|t| t.elapsed() < REDRAW_INTERVAL)
-        };
+        let mut inner = self.inner.lock().expect("progress mutex poisoned");
+        inner.done += bytes;
+        if !self.tty {
+            return;
+        }
+        let throttled = inner
+            .last_render
+            .is_some_and(|t| t.elapsed() < REDRAW_INTERVAL);
+        drop(inner);
         if !throttled {
             self.draw();
         }
+    }
+
+    /// 已累计字节数(仅供测试观测批报冲账; 生产代码无读取方)
+    #[cfg(test)]
+    pub fn done(&self) -> u64 {
+        self.inner.lock().expect("progress mutex poisoned").done
     }
 
     /// 标记一个文件处理完成(立即重绘, 文件计数可见)
@@ -192,12 +200,14 @@ mod tests {
 
     #[test]
     fn test_progress_non_tty_silent() {
-        // 测试环境 stderr 非 TTY: 全流程静默, 只验证不 panic 与 finish 幂等
+        // 测试环境 stderr 非 TTY: 渲染静默但计数保留(批报冲账可观测),
+        // 验证不 panic 与 finish 幂等
         let progress = Progress::start("test", 1000, 4);
         progress.add(400);
         progress.file_done();
         progress.note_error();
         progress.add(600);
+        assert_eq!(progress.done(), 1000);
         progress.file_done();
         progress.finish();
         progress.finish();

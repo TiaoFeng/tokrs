@@ -226,6 +226,43 @@ fn test_line_contains_filters_empty_needles() {
 }
 
 #[test]
+fn test_for_each_jsonl_progress_batched_and_flushed() {
+    // 批报: 消费字节按 64KB 阈值累积, 退出前冲账剩余 → done 精确等于已消费字节
+    let base = temp_dir("progress_batch");
+    // 小文件: 全程不达阈值, 仅 EOF 冲账
+    let small = base.join("small.jsonl");
+    fs::write(&small, "{\"a\":1}\n{\"a\":2}\n").unwrap();
+    let len = fs::metadata(&small).unwrap().len();
+    let progress = Progress::start("test", len, 1);
+    for_each_jsonl_progress(&small, &[], &progress, |_| true).unwrap();
+    assert_eq!(progress.done(), len);
+    // 大文件(短行): 多次达阈值批报 + EOF 冲账
+    let big = base.join("big.jsonl");
+    fs::write(&big, "{\"a\":1}\n".repeat(64 * 1024 / 8 * 2)).unwrap(); // ~128KB
+    let len = fs::metadata(&big).unwrap().len();
+    let progress = Progress::start("test", len, 1);
+    for_each_jsonl_progress(&big, &[], &progress, |_| true).unwrap();
+    assert_eq!(progress.done(), len);
+    // 单行跨多个读缓冲: 行中途按阈值冲账(防进度条长期停滞) + EOF 冲账剩余
+    let oneline = base.join("oneline.jsonl");
+    fs::write(
+        &oneline,
+        format!("{{\"a\":\"{}\"}}\n", "x".repeat(200 * 1024)),
+    )
+    .unwrap();
+    let len = fs::metadata(&oneline).unwrap().len();
+    let progress = Progress::start("test", len, 1);
+    for_each_jsonl_progress(&oneline, &[], &progress, |_| true).unwrap();
+    assert_eq!(progress.done(), len);
+    // 提前终止: 冲账已消费字节(多行文件首行 8 字节; 早停后未读字节不计,
+    // 与逐行上报一致)
+    let progress = Progress::start("test", fs::metadata(&big).unwrap().len(), 1);
+    for_each_jsonl_progress(&big, &[], &progress, |_| false).unwrap();
+    assert_eq!(progress.done(), 8);
+    fs::remove_dir_all(&base).ok();
+}
+
+#[test]
 #[cfg(unix)]
 fn test_discover_files_skips_fifo() {
     let base = temp_dir("fifo");
@@ -246,12 +283,17 @@ fn test_discover_files_skips_fifo() {
 
 #[test]
 fn test_progress_reader_forwards_content() {
-    // ProgressReader: 透传内容并逐块向进度条上报字节(非 TTY 下 Progress 静默)
+    // ProgressReader: 透传内容, 按阈值批报 + Drop 冲账(非 TTY 下仅计数不渲染)
     let progress = Progress::start("test", 5, 1);
-    let mut reader = ProgressReader::new(Cursor::new("hello"), progress);
+    let mut reader = ProgressReader::new(Cursor::new("hello"), progress.clone());
     let mut out = String::new();
     reader.read_to_string(&mut out).unwrap();
     assert_eq!(out, "hello");
+    // 未达批报阈值不上报
+    assert_eq!(progress.done(), 0);
+    drop(reader);
+    // Drop 冲账剩余字节
+    assert_eq!(progress.done(), 5);
 }
 
 #[test]

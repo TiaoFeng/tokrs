@@ -116,6 +116,11 @@ fn collect_dir(
 /// 单行字节上限: 正常日志单行为 KB~MB 级, 上限防损坏/异常巨型行把内存撑爆
 const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
 
+/// 进度批报阈值: 消费字节累积达到该值才调用一次 progress.add(锁+节流时钟
+/// 按块摊薄; 重绘本就 100ms 节流, 64KB 粒度对进度条视觉无差);
+/// 文件尾/早停处冲账剩余, 读取错误路径欠账 <64KB(纯外观, 进度条即将消失)
+const PROGRESS_REPORT_CHUNK: u64 = 64 * 1024;
+
 /// 进度感知变体: 每消费一段即向 progress 上报字节数(节流重绘在 Progress 内部);
 /// 其余语义见 for_each_jsonl_impl 文档
 pub fn for_each_jsonl_progress(
@@ -151,6 +156,8 @@ fn for_each_jsonl_impl(
     let mut warned = false;
     // needle 过滤门闩: 首条成功解析的行之前不过滤(见函数文档)
     let mut parsed_any = false;
+    // 进度批报累积: 达 PROGRESS_REPORT_CHUNK 才上报一次, 退出前冲账剩余
+    let mut pending = 0u64;
     loop {
         line.clear();
         let mut oversized = false;
@@ -176,9 +183,7 @@ fn for_each_jsonl_impl(
                         oversized = true;
                     }
                     reader.consume(nl + 1);
-                    if let Some(p) = progress {
-                        p.add((nl + 1) as u64);
-                    }
+                    pending += (nl + 1) as u64;
                 }
                 None => {
                     if !oversized && line.len() + buf.len() <= max_line {
@@ -188,8 +193,12 @@ fn for_each_jsonl_impl(
                     }
                     let len = buf.len();
                     reader.consume(len);
-                    if let Some(p) = progress {
-                        p.add(len as u64);
+                    pending += len as u64;
+                    // 行未结束也按阈值冲账: 防无换行巨型行/文件期间进度条长期停滞
+                    if pending >= PROGRESS_REPORT_CHUNK
+                        && let Some(p) = progress
+                    {
+                        p.add(std::mem::take(&mut pending));
                     }
                     continue; // 行未结束, 继续读
                 }
@@ -197,7 +206,18 @@ fn for_each_jsonl_impl(
             break; // 换行处行结束
         }
         if eof && !any {
-            return Ok(()); // 数据读完
+            // 数据读完: 冲账剩余(<64KB), 保证小文件/末段字节计入进度
+            if pending > 0
+                && let Some(p) = progress
+            {
+                p.add(pending);
+            }
+            return Ok(());
+        }
+        if pending >= PROGRESS_REPORT_CHUNK
+            && let Some(p) = progress
+        {
+            p.add(std::mem::take(&mut pending));
         }
         if oversized {
             if !warned {
@@ -215,6 +235,12 @@ fn for_each_jsonl_impl(
         if let Ok(value) = serde_json::from_slice::<Value>(&line) {
             parsed_any = true;
             if !on_line(value) {
+                // 提前终止: 冲账已消费字节(早停后未读字节不计, 与逐行上报一致)
+                if pending > 0
+                    && let Some(p) = progress
+                {
+                    p.add(pending);
+                }
                 return Ok(());
             }
         }
@@ -339,7 +365,7 @@ pub fn warn_file(err: &AppError) {
     eprintln!("> {err}");
 }
 
-/// 进度感知 reader: 每读到一段字节即向 progress 上报
+/// 进度感知 reader: 消费字节按阈值批报, Drop 时冲账剩余
 ///
 /// 用于无法逐行流式的单一对象文件(如 gemini 的 session JSON):
 /// 配合 serde_json Deserializer::from_reader(IoRead 真流式)实现字节驱动进度;
@@ -347,19 +373,37 @@ pub fn warn_file(err: &AppError) {
 pub struct ProgressReader<R> {
     inner: R,
     progress: Progress,
+    pending: u64,
 }
 
 impl<R: Read> ProgressReader<R> {
     pub fn new(inner: R, progress: Progress) -> Self {
-        ProgressReader { inner, progress }
+        ProgressReader {
+            inner,
+            progress,
+            pending: 0,
+        }
     }
 }
 
 impl<R: Read> Read for ProgressReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let n = self.inner.read(buf)?;
-        self.progress.add(n as u64);
+        self.pending += n as u64;
+        if self.pending >= PROGRESS_REPORT_CHUNK {
+            self.progress.add(std::mem::take(&mut self.pending));
+        }
         Ok(n)
+    }
+}
+
+impl<R> Drop for ProgressReader<R> {
+    fn drop(&mut self) {
+        // 正常读完(serde_json 可能在 EOF 前停止读取)或提前放弃时冲账剩余字节;
+        // 读取错误路径同理(纯外观欠账)
+        if self.pending > 0 {
+            self.progress.add(std::mem::take(&mut self.pending));
+        }
     }
 }
 
