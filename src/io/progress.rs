@@ -56,7 +56,7 @@ impl Progress {
     /// 累计已消费字节数(内部节流重绘)
     pub fn add(&self, bytes: u64) {
         let throttled = {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock().expect("progress mutex poisoned");
             inner.done += bytes;
             inner
                 .last_render
@@ -69,23 +69,26 @@ impl Progress {
 
     /// 标记一个文件处理完成(立即重绘, 文件计数可见)
     pub fn file_done(&self) {
-        self.inner.lock().unwrap().files_done += 1;
+        self.inner
+            .lock()
+            .expect("progress mutex poisoned")
+            .files_done += 1;
         self.draw();
     }
 
     /// 记一次文件级错误(进度条显示 err 计数; 文件名由警告行输出)
     pub fn note_error(&self) {
-        self.inner.lock().unwrap().errors += 1;
+        self.inner.lock().expect("progress mutex poisoned").errors += 1;
         self.draw();
     }
 
     /// 完成收尾: 渲染最终帧后补换行; 幂等
     pub fn finish(&self) {
         if !self.tty {
-            self.inner.lock().unwrap().finished = true;
+            self.inner.lock().expect("progress mutex poisoned").finished = true;
             return;
         }
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().expect("progress mutex poisoned");
         if inner.finished {
             return;
         }
@@ -99,7 +102,7 @@ impl Progress {
         if !self.tty {
             return;
         }
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().expect("progress mutex poisoned");
         if inner.finished {
             return;
         }
@@ -165,7 +168,9 @@ pub fn fmt_bytes(n: u64) -> String {
         }
         v /= 1024.0;
     }
-    unreachable!("units 末项已兜底返回")
+    unreachable!(
+        "The last item in `units` will always return a result; this branch is unreachable."
+    )
 }
 
 /// 字符级截断(渲染行宽控制)

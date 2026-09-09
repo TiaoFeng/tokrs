@@ -49,7 +49,9 @@ pub fn env_abs_path(var: &str, raw: Option<&OsStr>, home: &Path) -> Option<PathB
     if path.is_absolute() {
         Some(path)
     } else {
-        eprintln!("> {var}='{s}' 不是绝对路径, 已忽略(回退默认路径)");
+        eprintln!(
+            ">_: {var}='{s}' is not an absolute path; it has been ignored (falling back to the default path)"
+        );
         None
     }
 }
@@ -295,16 +297,19 @@ where
                     }
                     let out = parse(&files[idx], progress);
                     progress.file_done();
-                    results.lock().unwrap().push((idx, out));
+                    results.lock().expect("mutex poisoned").push((idx, out));
                 }
             });
         }
     });
     let mut slots: Vec<Option<T>> = (0..files.len()).map(|_| None).collect();
-    for (idx, out) in results.into_inner().unwrap() {
+    for (idx, out) in results.into_inner().expect("mutex poisoned") {
         slots[idx] = Some(out);
     }
-    slots.into_iter().map(Option::unwrap).collect()
+    slots
+        .into_iter()
+        .map(|opt| opt.expect("missing file result"))
+        .collect()
 }
 
 /// 文件列表总字节(进度条总量; metadata 失败按 0 计)

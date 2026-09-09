@@ -35,7 +35,7 @@ pub struct Cli {
         long,
         value_delimiter = ',',
         ignore_case = true,
-        help = "Applications of Statistics (Claude, Codex, OpenCode, Gemini, Grok, Pi, Kimi)—all by default"
+        help = "Applications of Statistics (Claude, Codex, OpenCode, Gemini, Grok, Pi, Kimi)-all by default"
     )]
     app: Vec<AppKind>,
     #[arg(
@@ -67,7 +67,7 @@ fn resolve_threads(raw: Option<usize>) -> Option<usize> {
         None | Some(0) => None,
         Some(n) if n > load::MAX_THREADS => {
             eprintln!(
-                "> --threads={n} 超过上限 {}, 已按上限执行",
+                ">_: --threads={n} Exceeded the limit of {}, executed according to the limit",
                 load::MAX_THREADS
             );
             Some(load::MAX_THREADS)
@@ -96,7 +96,7 @@ pub fn run(cli: Cli) -> Result<(), AppError> {
     let added = apps::prince::sync_models(&mut table, &pricing_path, &entries)?;
     if added > 0 {
         eprintln!(
-            "> added {added} model(s) to {} (prices null until filled in)",
+            ">_: added {added} model(s) to {} (prices null until filled in)",
             pricing_path.display()
         );
     }
