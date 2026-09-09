@@ -8,6 +8,8 @@
 
 一个使用 Rust 编写的本地 Token 用量统计 CLI。直接读取 Claude Code、Codex、OpenCode、Gemini CLI、Grok Build、Pi、Kimi Code 在本地留下的日志/数据库文件，统计各 app、各模型、各日期的 Token 消耗与成本。无任何守护进程、无任何网络请求、对数据源只读。
 
+> 本工具仅在运行时扫描日志/数据库，不保存日志或持久化记录。因此统计的数据仅代表当下本地日志/数据库中的token总量。结果会因删除了一些对话而小于cc-switch
+
 ## 特性
 
 - 支持 7 种 agent：Claude / Codex / OpenCode / Gemini / Grok / Pi / Kimi

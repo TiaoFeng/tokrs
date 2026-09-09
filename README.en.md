@@ -8,6 +8,8 @@
 
 A native token usage statistics CLI written in Rust. It directly reads the log and database files left by Claude Code, Codex, OpenCode, Gemini CLI, Grok Build, Pi, and Kimi Code on your local machine to track token consumption and costs by app, model, and date. It has no daemons, makes no network requests, and accesses data sources in read-only mode.
 
+> This tool only scans logs and databases at runtime; it does not save logs or persist records. Therefore, the statistics represent only the total number of tokens currently in the local logs and databases. The results may be lower than those from cc-switch due to the deletion of some conversations.
+
 ## Features
 
 - Supports 7 agents: Claude / Codex / OpenCode / Gemini / Grok / Pi / Kimi
