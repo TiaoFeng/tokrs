@@ -14,7 +14,7 @@ const REDRAW_INTERVAL: Duration = Duration::from_millis(100);
 /// 进度条字符宽
 const BAR_WIDTH: usize = 40;
 /// 整行最大渲染宽度(超出截断, 右侧补空格擦除残留)
-const LINE_WIDTH: usize = 128;
+const LINE_WIDTH: usize = 100;
 
 /// 进度内核状态(锁内持有)
 struct Inner {
