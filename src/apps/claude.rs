@@ -16,11 +16,14 @@ use crate::{
 
 const MAX_DEPTH: usize = 5;
 
-/// 行级预过滤 needle: 候选行必含 usage 对象, 其余零分配跳过(对齐 codex 同款
-/// 机制); 首行 sessionId 兜底由 load 的首行不过滤规则保障, 过滤后兜底链取自
-/// "过滤后首条带 sessionId 的行"——与不过滤版的偏差仅当前导存在带 sessionId
-/// 但无 usage 的行且后续 assistant 行缺 sessionId(现实中每行都写 sessionId,
-/// 不影响 token 数值, 仅影响备查的 session 标签)
+/// 行级预过滤 needle
+///
+/// 规则:
+/// - 候选行必含 usage 对象, 其余零分配跳过(对齐 codex 同款
+///   机制); 首行 sessionId 兜底由 load 的首行不过滤规则保障, 过滤后兜底链取自
+/// - "过滤后首条带 sessionId 的行"——与不过滤版的偏差仅当前导存在带 sessionId
+///   但无 usage 的行且后续 assistant 行缺 sessionId(现实中每行都写 sessionId,
+///   不影响 token 数值, 仅影响备查的 session 标签)
 const CLAUDE_LINE_NEEDLES: [&str; 1] = ["\"usage\""];
 
 /// claude 数据根(官方 CLAUDE_CONFIG_DIR > ~/.claude); 环境变量经 load::env_abs_path
@@ -37,12 +40,6 @@ pub fn collect(threads: Option<usize>) -> Result<Vec<UsageEntry>, AppError> {
         return Ok(Vec::new());
     }
     collect_from_with(&base, threads)
-}
-
-/// 测试便捷入口(auto 线程); 生产路径经 collect(threads)
-#[cfg(test)]
-pub fn collect_from(base: &Path) -> Result<Vec<UsageEntry>, AppError> {
-    collect_from_with(base, None)
 }
 
 fn collect_from_with(base: &Path, threads: Option<usize>) -> Result<Vec<UsageEntry>, AppError> {
@@ -159,6 +156,12 @@ fn parse_assistant_line(
             }
         }
     }
+}
+
+/// 测试便捷入口(auto 线程); 生产路径经 collect(threads)
+#[cfg(test)]
+pub fn collect_from(base: &Path) -> Result<Vec<UsageEntry>, AppError> {
+    collect_from_with(base, None)
 }
 
 #[cfg(test)]

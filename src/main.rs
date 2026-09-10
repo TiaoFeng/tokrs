@@ -16,7 +16,7 @@ fn main() {
         eprintln!(":( error: {err}");
         let mut source = err.source();
         while let Some(src) = source {
-            eprintln!("Caused by: {}", src);
+            eprintln!("Caused by: {src}");
             source = src.source()
         }
         std::process::exit(1);

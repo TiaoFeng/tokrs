@@ -1,5 +1,6 @@
 //! Cli格式化输出
 //!
+//! 表格输出格式使用ASCII编码
 use comfy_table::presets::ASCII_HORIZONTAL_ONLY;
 use comfy_table::{Attribute, Cell, Table};
 use serde_json::json;
@@ -17,9 +18,10 @@ const HEADERS: [&str; 8] = [
     "Cost",
 ];
 
+/// 输出最终报表业务函数
 pub fn print_report(rows: &[(String, TokenTotals)], total: &TokenTotals, today: &TokenTotals) {
     if rows.is_empty() {
-        println!(">_ No usage data found.");
+        println!(">_: No usage data found.");
         return;
     }
     let mut table = Table::new();
@@ -30,7 +32,7 @@ pub fn print_report(rows: &[(String, TokenTotals)], total: &TokenTotals, today: 
         table.add_row(row_cells(key, totals));
     }
     table.add_row(bold_row("Total", total));
-    println!("{}", table);
+    println!("{table}");
     if total.unpriced > 0 {
         println!(
             "  * {} request(s) unpriced, cost not counted",
@@ -39,13 +41,9 @@ pub fn print_report(rows: &[(String, TokenTotals)], total: &TokenTotals, today: 
     }
 }
 
-fn bold_row(key: &str, totals: &TokenTotals) -> Vec<Cell> {
-    row_cells(key, totals)
-        .into_iter()
-        .map(|c| Cell::new(c).add_attribute(Attribute::Bold))
-        .collect()
-}
-
+/// 输出json格式业务函数
+///
+/// 使用serde_json格式化输出
 pub fn print_json(rows: &[(String, TokenTotals)], total: &TokenTotals, today: &TokenTotals) {
     let doc = json!({
         "rows": rows
@@ -58,6 +56,7 @@ pub fn print_json(rows: &[(String, TokenTotals)], total: &TokenTotals, today: &T
     println!("{}", serde_json::to_string_pretty(&doc).unwrap_or_default());
 }
 
+/// 输出每个json块的格式
 fn totals_json(totals: &TokenTotals) -> serde_json::Value {
     json!({
         "requests": totals.requests,
@@ -71,7 +70,9 @@ fn totals_json(totals: &TokenTotals) -> serde_json::Value {
     })
 }
 
-/// 成本单元格: 一条都没定价显示 "-", 有价显示美元(小额 4 位小数), 部分无价加 "*"
+/// 成本单元格:
+///
+/// 无定价显示 "-", 有价显示美元(小额 4 位小数), 部分无价加 "*"
 fn cost_text(totals: &TokenTotals) -> String {
     if totals.unpriced == totals.requests {
         return "-".to_string();
@@ -84,6 +85,7 @@ fn cost_text(totals: &TokenTotals) -> String {
     }
 }
 
+/// 小额(< 0.01)显示四位小数, 其余显示两位
 fn fmt_usd(cost: f64) -> String {
     if cost > 0.0 && cost < 0.01 {
         format!("${cost:.4}")
@@ -92,6 +94,7 @@ fn fmt_usd(cost: f64) -> String {
     }
 }
 
+/// 生成普通行函数
 fn row_cells(key: &str, totals: &TokenTotals) -> Vec<String> {
     vec![
         key.to_string(),
@@ -105,6 +108,17 @@ fn row_cells(key: &str, totals: &TokenTotals) -> Vec<String> {
     ]
 }
 
+/// 返回加粗的行
+///
+/// 用于Today行加粗显示
+fn bold_row(key: &str, totals: &TokenTotals) -> Vec<Cell> {
+    row_cells(key, totals)
+        .into_iter()
+        .map(|c| Cell::new(c).add_attribute(Attribute::Bold))
+        .collect()
+}
+
+/// 用于每三位标记','
 fn thousands(n: u64) -> String {
     let digits = n.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);

@@ -143,9 +143,8 @@ impl Progress {
             String::new()
         };
         let msg = format!(
-            "{} [{head}{rest}] {:>5.1}% {:>9}/{:<9}{files}{err}",
+            "{} [{head}{rest}] {pct:>5.1}% {:>9}/{:<9}{files}{err}",
             self.label,
-            pct,
             fmt_bytes(inner.done),
             fmt_bytes(inner.total),
         );

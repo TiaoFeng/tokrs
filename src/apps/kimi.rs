@@ -1,6 +1,6 @@
 //! kimi-code 日志解析
 //!
-//! 数据源: ~/.kimi-code/sessions/<wd_key>/<session_id>/agents/<agentId>/wire.jsonl
+//! 数据源: `~/.kimi-code/sessions/<wd_key>/<session_id>/agents/<agentId>/wire.jsonl`
 //! 只统计 type=="usage.record" 事件; 经实测每条是一次真实 LLM 调用的定值面值
 //! (与 llm.request 一一对应, 每 step 恰好一条), 逐条相加即官方计费口径
 //! inputOther 为 fresh input(不含缓存, 实测恒小于 cacheRead), thinking token 已并入 output,

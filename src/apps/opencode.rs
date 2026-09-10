@@ -49,7 +49,7 @@ pub fn collect_from(db_path: &Path) -> Result<Vec<UsageEntry>, AppError> {
         return Ok(Vec::new());
     }
     // 无文件字节流可推进(SQLite 单查询), 仅 TTY 起止提示
-    progress::stderr_note(&format!("opencode: scanning {}", db_path.display()));
+    progress::stderr_note(&format!(">_: opencode: scanning {}", db_path.display()));
     // 单 DB 源不可用: 警告后返回空(与其余 app 的单文件失败策略一致), 不中止全局
     let Some(conn) = warn_sqlite(
         Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
@@ -95,7 +95,7 @@ pub fn collect_from(db_path: &Path) -> Result<Vec<UsageEntry>, AppError> {
         }
         parse_message(&data, &session_id, &mut entries);
     }
-    progress::stderr_note("opencode: done");
+    progress::stderr_note(">_: opencode: done");
     Ok(entries)
 }
 

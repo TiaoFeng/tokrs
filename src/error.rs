@@ -38,6 +38,7 @@ pub fn json_err(path: &Path, err: serde_json::Error) -> AppError {
     }
 }
 
+/// 用于使用端快速的生成 `AppError::Sqlite` 这种错误类型
 pub fn sqlite_err(path: &Path, err: rusqlite::Error) -> AppError {
     AppError::Sqlite {
         path: path.to_string_lossy().to_string(),
@@ -53,18 +54,19 @@ impl fmt::Display for AppError {
                 path,
                 source,
             } => {
-                write!(f, "failed to {} '{}': {}", operation, path, source)
+                write!(f, "failed to {operation} '{path}': {source}")
             }
             AppError::Corrupted { path, source } => {
-                write!(f, "file '{}' is corrupted: {}", path, source)
+                write!(f, "file '{path}' is corrupted: {source}")
             }
             AppError::Sqlite { path, source } => {
-                write!(f, "sqlite error on '{}': {}", path, source)
+                write!(f, "sqlite error on '{path}': {source}")
             }
         }
     }
 }
 
+/// 为 AppError 实现 Error 用于传递 source
 impl Error for AppError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {

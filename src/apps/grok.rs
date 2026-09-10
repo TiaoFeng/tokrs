@@ -1,6 +1,6 @@
 //! grok日志解析
 //!
-//! 数据源: ~/.grok/{sessions,archived_sessions}/<enc-cwd>/<session-id>/updates.jsonl
+//! 数据源: `~/.grok/{sessions,archived_sessions}/<enc-cwd>/<session-id>/updates.jsonl`
 //! 只统计 turn_completed 事件; usage 是逐轮独立总量, 按面值入账(禁差分, 差分致巨量漏记)
 //! reasoningTokens 已含于 outputTokens 不另计; inputTokens 含 cachedRead 已扣除归一
 //! costUsdTicks 待定价模块处理

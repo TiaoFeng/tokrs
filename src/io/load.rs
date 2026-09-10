@@ -1,11 +1,11 @@
 //! 从用户文件夹中读取每个agent的数据文件
 //!
-//! 日志文件可达 GB 级: 所有读取均为流式(逐行/逐块), 峰值内存 O(单行),
-//! 修改原本的读取逻辑(整读 + DOM 驻留会耗尽内存)
-//! 单文件失败统一 warn_file 警告后跳过(不中止全局); 单对象文件(如 gemini
-//! session)经 ProgressReader + serde Visitor 流式逐条解析(峰值 O(单条消息));
-//! zstd 压缩 JSONL(如 dsh)流式解压逐行解析, 进度按压缩字节推进;
-//! 文件级并行扫描(map_files: 原子索引抢占 + 结果按序回填, 合并语义与串行一致)
+//! 说明:
+//! - 日志文件可达 GB 级: 所有读取均为流式(逐行/逐块), 峰值内存 O(单行)
+//! - 单文件失败统一 warn_file 警告后跳过(不中止全局); 单对象文件(如 gemini
+//!   session)经 ProgressReader + serde Visitor 流式逐条解析(峰值 O(单条消息))
+//! - zstd 压缩 JSONL(如 dsh)流式解压逐行解析, 进度按压缩字节推进;
+//! - 文件级并行扫描(map_files: 原子索引抢占 + 结果按序回填, 合并语义与串行一致)
 //!
 use serde_json::Value;
 use std::{
@@ -30,11 +30,13 @@ pub fn home_dir() -> Result<PathBuf, AppError> {
     })
 }
 
-/// 环境变量路径值归一(各 app 数据根目录覆盖用)
+/// 环境变量路径值归一(各 app 数据根目录覆盖)
 ///
-/// trim + 空串视为未设置; `~`/`~/`/`~\` 前缀展开为 home 下路径;
-/// 其余须为绝对路径, 非绝对 stderr 警告一行后返回 None(调用方回退默认)——
-/// 防"设了非法值却静默读错库"无信号
+/// 逻辑:
+/// - trim + 空串视为未设置
+/// - `~`/`~/`/`~\` 前缀展开为 home 下路径
+/// - 环境变量覆盖的路径须为绝对路径, 非绝对 stderr 警告一行后返回 None(调用方回退默认),
+///   防"设了非法值却静默读错库"无信号
 pub fn env_abs_path(var: &str, raw: Option<&OsStr>, home: &Path) -> Option<PathBuf> {
     let s = raw?.to_string_lossy().trim().to_string();
     if s.is_empty() {
@@ -57,7 +59,9 @@ pub fn env_abs_path(var: &str, raw: Option<&OsStr>, home: &Path) -> Option<PathB
     }
 }
 
-/// XDG 数据根目录: XDG_DATA_HOME(空串视为未设置) > ~/.local/share
+/// XDG 数据根目录
+///
+/// XDG_DATA_HOME(空串视为未设置) > ~/.local/share
 pub fn xdg_data_dir(home: &Path, raw: Option<&OsStr>) -> PathBuf {
     match raw {
         Some(v) if !v.to_string_lossy().trim().is_empty() => {
@@ -74,7 +78,7 @@ pub fn now_epoch() -> i64 {
         .unwrap_or(0)
 }
 
-/// 递归收集 base 下指定扩展名的普通文件（深度不超过 max_depth，结果确定性排序）
+/// 递归收集 base 下指定扩展名的普通文件(深度不超过 max_depth,结果确定性排序)
 pub fn discover_files(base: &Path, extension: &str, max_depth: usize) -> Vec<PathBuf> {
     let mut files = Vec::new();
     collect_dir(base, extension, 0, max_depth, &mut files);
@@ -97,7 +101,7 @@ fn collect_dir(
             continue;
         };
         let path = entry.path();
-        // 只跟随目录、只收集普通文件: symlink/FIFO/socket/设备一律跳过
+        // 只跟随目录,只收集普通文件: symlink/FIFO/socket/设备一律跳过
         // (FIFO 等特殊文件会让读取永久阻塞; symlink 的 file_type.is_file() 为 false)
         if file_type.is_dir() {
             if depth < max_depth {
@@ -117,12 +121,13 @@ fn collect_dir(
 /// 单行字节上限: 正常日志单行为 KB~MB 级, 上限防损坏/异常巨型行把内存撑爆
 const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
 
-/// 进度批报阈值: 消费字节累积达到该值才调用一次 progress.add(锁+节流时钟
+/// 进度条刷新阈值: 消费字节累积达到该值才调用一次 progress.add(锁+节流时钟
 /// 按块摊薄; 重绘本就 100ms 节流, 64KB 粒度对进度条视觉无差);
 /// 文件尾/早停处冲账剩余, 读取错误路径欠账 <64KB(纯外观, 进度条即将消失)
 const PROGRESS_REPORT_CHUNK: u64 = 64 * 1024;
 
-/// 进度感知变体: 每消费一段即向 progress 上报字节数(节流重绘在 Progress 内部);
+/// 进度感知变体: 每消费一段即向 progress 上报字节数(节流重绘在 Progress 内部)
+///
 /// 其余语义见 for_each_jsonl_impl 文档
 pub fn for_each_jsonl_progress(
     path: &Path,
@@ -135,11 +140,11 @@ pub fn for_each_jsonl_progress(
 
 /// 流式逐行读取 JSONL(私有内核)
 ///
-/// 文件可达 GB 级, 禁止整读驻留: 逐行解析、处理完即释放, 峰值内存 O(单行)。
+/// 文件可达 GB 级, 禁止整读驻留: 逐行解析,处理完即释放, 峰值内存 O(单行)
 /// - 行含任一 needle 字节串才解析回调, 否则零分配跳过(空 needles 全放行);
 ///   needle 须为不含转义的 ASCII 字面量(如 "\"token_count\"")
 /// - needle 过滤自首条成功解析的行之后生效: 首条有效 JSON 行总是回调
-///   (pi 的 session header 校验、claude 的 sessionId 兜底依赖真实首行;
+///   (pi 的 session header 校验,claude 的 sessionId 兜底依赖真实首行;
 ///   其余解析器对首行回调为无副作用 no-op)
 /// - 行超过 max_line 整行跳过并每文件警告一次, 继续消费到换行为止
 /// - 畸形行/无效 UTF-8 行跳过(from_slice 语义与整读版逐字一致, 含 CRLF/末行无换行)
@@ -238,12 +243,13 @@ fn for_each_line_core<R: Read>(
         {
             p.add(std::mem::take(&mut pending));
         }
+        // 超限后发出提示,继续执行读取下一行
         if oversized {
             if !warned {
                 warned = true;
                 eprintln!(
-                    "> {}: line(s) over {max_line} bytes skipped",
-                    path.display()
+                    ">_: {}: line(s) over {max_line} bytes skipped",
+                    path.display(),
                 );
             }
             continue;
@@ -447,14 +453,14 @@ pub fn file_name_str(path: &Path) -> &str {
 /// 各 app 的单文件读取/解析失败一律警告后跳过继续, 不中止全局统计;
 /// 全局性错误(home 解析失败/pricing.json 损坏)仍硬退出
 pub fn warn_file(err: &AppError) {
-    eprintln!("> {err}");
+    eprintln!(":( {err}");
 }
 
 /// 进度感知 reader: 消费字节按阈值批报, Drop 时冲账剩余
 ///
 /// 用于无法逐行流式的单一对象文件(如 gemini 的 session JSON):
 /// 配合 serde_json Deserializer::from_reader(IoRead 真流式)实现字节驱动进度;
-/// Progress 为廉价 Clone 句柄(Arc<Mutex>), 按值持有
+/// Progress 为廉价 Clone 句柄(`Arc<Mutex>`), 按值持有
 pub struct ProgressReader<R> {
     inner: R,
     progress: Progress,
@@ -492,7 +498,7 @@ impl<R> Drop for ProgressReader<R> {
     }
 }
 
-/// 从 JSON 值按路径取 u64，缺失或类型不符返回 0
+/// 从 JSON 值按路径取 u64,缺失或类型不符返回 0
 pub fn u64_get(value: &Value, keys: &[&str]) -> u64 {
     match get_nested(value, keys) {
         Some(v) => v
@@ -519,14 +525,14 @@ pub fn cost_get(value: &Value, keys: &[&str]) -> Option<f64> {
     (cost > 0.0 && cost.is_finite()).then_some(cost)
 }
 
-/// 从 JSON 值按路径取 bool，缺失或类型不符返回 false
+/// 从 JSON 值按路径取 bool,缺失或类型不符返回 false
 pub fn bool_get(value: &Value, keys: &[&str]) -> bool {
     get_nested(value, keys)
         .and_then(Value::as_bool)
         .unwrap_or(false)
 }
 
-/// 时间戳自适应解析：数字（秒/毫秒）、数字字符串或 RFC3339，统一转 epoch 秒
+/// 时间戳自适应解析:数字(秒/毫秒),数字字符串或 RFC3339,统一转 epoch 秒
 pub fn timestamp_to_epoch(value: &Value) -> Option<i64> {
     if let Some(n) = value.as_i64() {
         return Some(if n > 100_000_000_000 { n / 1000 } else { n });

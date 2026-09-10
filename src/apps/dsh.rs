@@ -1,6 +1,6 @@
 //! dsh 日志解析
 //!
-//! 数据源: $DSH_HOME(默认 ~/.dsh)/sessions/<编码工作区>/session-<UUID>/session.jsonl.zstd
+//! 数据源: `$DSH_HOME(默认 ~/.dsh)/sessions/<编码工作区>/session-<UUID>/session.jsonl.zstd`
 //! zstd 压缩 JSONL, 经 io/load 的 zstd 变体流式解压逐行解析(峰值 O(单行), 进度按压缩字节推进)
 //! 事件信封: {type, seq, time(epoch ms), data}; 只统计 type=="assistant/message" 事件:
 //! - usage 双发(assistant/chunk 的 usage chunk 与 assistant/message 各一份, 值相同):

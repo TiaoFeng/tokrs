@@ -1,6 +1,6 @@
 //! gemini日志解析
 //!
-//! 数据源: ~/.gemini/tmp/<project>/chats/session-*.json
+//! 数据源: `~/.gemini/tmp/<project>/chats/session-*.json`
 //! 每个文件是单个 JSON 对象(非 JSONL), 含 messages 数组
 //!
 //! 流式解析: serde_json Deserializer::from_reader(IoRead 逐块) + 自定义 Visitor,

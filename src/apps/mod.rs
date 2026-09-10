@@ -16,8 +16,9 @@ use std::hash::{Hash, Hasher};
 
 /// 上游 input 含缓存时归一为 fresh input
 ///
-/// 对齐 cc-switch CACHE_INCLUSIVE_APP_TYPES(codex/gemini/grok): 这三家的
-/// input 字段包含 cache read(及 codex 的 cache write), 直接相加会双算.
+/// 对齐 cc-switch CACHE_INCLUSIVE_APP_TYPES(codex/gemini/grok):
+///
+/// codex/gemini/grok 日志中 input 字段包含 cache read(及 codex 的 cache write), 直接相加会双算.
 /// 数据不一致(input < read+write)时保守不扣, 避免把上游异常抹成负数.
 pub fn fresh_input(input: u64, cache_read: u64, cache_creation: u64) -> u64 {
     input

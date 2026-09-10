@@ -59,16 +59,16 @@ pub struct UsageEntry {
     #[allow(dead_code)]
     pub session_id: Option<String>,
     pub created_at: i64,
-    /// fresh input(与缓存无关的增量输入)
+    /// fresh input(不含缓存的新增输入)
     ///
-    /// codex/gemini/grok 上游 input 含缓存, 已在解析层扣除归一, 全 app 语义统一
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub cache_read_tokens: u64,
-    pub cache_creation_tokens: u64,
+    /// codex/gemini/grok 的日志中 input 项包含缓存, 已在解析层扣除归一, 保持全 app 语义统一
+    pub input_tokens: u64, // 输入词元(不含缓存)
+    pub output_tokens: u64,         // 输出词元
+    pub cache_read_tokens: u64,     // 缓存命中
+    pub cache_creation_tokens: u64, // 缓存创建
     /// 上游自报成本(USD), 仅当来源可信且 >0 时填充
     pub self_cost_usd: Option<f64>,
-    /// 最终成本(USD): 自报优先, 否则由定价表估价, 均无则 None(计入 unpriced)
+    /// 最终成本(USD): 自报优先(可以被价目表中force覆盖), 否则由定价表估价, 均无则 None(计入 unpriced)
     pub cost_usd: Option<f64>,
 }
 
@@ -105,16 +105,17 @@ impl UsageEntry {
     }
 }
 
+/// 统计全局词元总用量
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub struct TokenTotals {
-    pub requests: u64,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub cache_read_tokens: u64,
-    pub cache_creation_tokens: u64,
+    pub requests: u64,              // 请求数
+    pub input_tokens: u64,          // 输入词元(不含缓存)
+    pub output_tokens: u64,         // 输出词元
+    pub cache_read_tokens: u64,     // 缓存命中
+    pub cache_creation_tokens: u64, // 缓存创建
     /// 已确定成本的请求成本合计(USD), 含自报与估价
     pub cost_usd: f64,
-    /// 无任何成本来源的请求数, 成本合计不含这些请求
+    /// 无任何成本来源的请求数, 成本合计不含这些请求(标记'*'提示)
     pub unpriced: u64,
 }
 

@@ -72,12 +72,6 @@ pub fn collect(threads: Option<usize>) -> Result<Vec<UsageEntry>, AppError> {
     collect_from_with(&base, threads)
 }
 
-/// 测试便捷入口(auto 线程); 生产路径经 collect(threads)
-#[cfg(test)]
-pub fn collect_from(base: &Path) -> Result<Vec<UsageEntry>, AppError> {
-    collect_from_with(base, None)
-}
-
 fn collect_from_with(base: &Path, threads: Option<usize>) -> Result<Vec<UsageEntry>, AppError> {
     let mut files = load::discover_files(&base.join("sessions"), "jsonl", SESSIONS_MAX_DEPTH);
     files.extend(load::discover_files(
@@ -593,7 +587,7 @@ fn emit_entries(
     }
 }
 
-/// 文件名尾部 36 字符的线程 uuid(rollout-<ts>-<uuid>.jsonl), 作父链索引键;
+/// 文件名尾部 36 字符的线程 `uuid(rollout-<ts>-<uuid>.jsonl)`, 作父链索引键;
 /// 双段文件名(thread/revert 替换 rollout)的尾段是物理 rollout id, 与 cc-switch
 /// 一致仅用尾部
 fn thread_id_from_filename(path: &Path) -> Option<String> {
@@ -633,6 +627,12 @@ fn is_uuid_like(s: &str) -> bool {
             8 | 13 | 18 | 23 => c == b'-',
             _ => c.is_ascii_hexdigit(),
         })
+}
+
+/// 测试便捷入口(auto 线程); 生产路径经 collect(threads)
+#[cfg(test)]
+pub fn collect_from(base: &Path) -> Result<Vec<UsageEntry>, AppError> {
+    collect_from_with(base, None)
 }
 
 #[cfg(test)]

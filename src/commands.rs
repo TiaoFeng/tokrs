@@ -1,6 +1,6 @@
 //! 命令解析与运行入口
 //!
-//! 可以指定：
+//! 可以指定:
 //! - app种类
 //! - 按照day, app, model分组
 //! - 按照起始日期统计
@@ -60,9 +60,12 @@ pub struct Cli {
     threads: Option<usize>,
 }
 
-/// 解析 --threads: 0/缺省 → auto; 超上限提示后收敛(意图明确的越界, 资源保护);
-/// 负数/非数字由 clap 原生报错终止——显式 CLI 参数是用户意图, fail-fast
-/// (与"数据文件失败警告继续"分层: 环境不可控 vs 意图传错, 见 AGENTS.md)
+/// 解析 --threads
+///
+/// 规则:
+/// - 0/缺省 → auto
+/// - 超上限提示后自动设置;
+/// - 负数/非数字由 clap 原生报错终止
 fn resolve_threads(raw: Option<usize>) -> Option<usize> {
     match raw {
         None | Some(0) => None,
@@ -91,7 +94,7 @@ pub fn run(cli: Cli) -> Result<(), AppError> {
     };
 
     let mut entries = apps::collect(&app_kinds, resolve_threads(cli.threads))?;
-    // 价目表: 损坏直接报错不回写; 未覆盖模型自动追加 null 模板(用全量模型, 先于日期过滤)
+    // 价目表: 损坏直接报错不写入; 未覆盖模型自动追加 null 模板(用全量模型, 先于日期过滤)
     let pricing_path = apps::prince::pricing_path()?;
     let mut table = apps::prince::load_pricing(&pricing_path)?;
     let added = apps::prince::sync_models(&mut table, &pricing_path, &entries)?;

@@ -102,7 +102,7 @@ fn parse_session(file: &Path, progress: &Progress) -> HashMap<String, UsageEntry
     let mut session_id = "unknown".to_string();
     let mut header_ts: Option<i64> = None;
     // 首条有效 JSON 必须是 session header(畸形行已被流式过滤, 对齐参考实现);
-    // 首条非 header 则整文件跳过(回调返回 false 提前终止)。
+    // 首条非 header 则整文件跳过(回调返回 false 提前终止)
     // 单文件读取失败警告+err 计数后跳过(不中止全局); 逐行流式防 GB 级文件整读驻留
     if let Err(e) = load::for_each_jsonl_progress(file, &PI_LINE_NEEDLES, progress, |entry| {
         if !first_seen {
