@@ -54,6 +54,9 @@ pub fn collect(threads: Option<usize>) -> Result<Vec<UsageEntry>, AppError> {
         std::env::var_os("PI_CODING_AGENT_SESSION_DIR").as_deref(),
         std::env::var_os("PI_CODING_AGENT_DIR").as_deref(),
     );
+    if !roots.iter().any(|r| r.is_dir()) {
+        return Ok(Vec::new());
+    }
     collect_from_with(&roots, threads)
 }
 
