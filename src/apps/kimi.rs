@@ -49,12 +49,6 @@ pub fn collect(threads: Option<usize>) -> Result<Vec<UsageEntry>, AppError> {
     collect_from_with(&base, threads)
 }
 
-/// 测试便捷入口(auto 线程); 生产路径经 collect(threads)
-#[cfg(test)]
-pub fn collect_from(base: &Path) -> Result<Vec<UsageEntry>, AppError> {
-    collect_from_with(base, None)
-}
-
 fn collect_from_with(base: &Path, threads: Option<usize>) -> Result<Vec<UsageEntry>, AppError> {
     // 预筛真正解析的文件(只认 wire.jsonl, 排除 tasks/blobs 等目录的其它 jsonl, 对齐 grok),
     // 总字节数供进度条按字节推进
@@ -152,6 +146,12 @@ fn parse_wire(file: &Path, progress: &Progress) -> HashMap<String, UsageEntry> {
         progress.note_error();
     }
     candidates
+}
+
+/// 测试便捷入口(auto 线程); 生产路径经 collect(threads)
+#[cfg(test)]
+pub fn collect_from(base: &Path) -> Result<Vec<UsageEntry>, AppError> {
+    collect_from_with(base, None)
 }
 
 #[cfg(test)]

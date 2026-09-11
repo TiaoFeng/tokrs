@@ -37,12 +37,6 @@ pub fn collect(threads: Option<usize>) -> Result<Vec<UsageEntry>, AppError> {
     collect_from_with(&base, threads)
 }
 
-/// 测试便捷入口(auto 线程); 生产路径经 collect(threads)
-#[cfg(test)]
-pub fn collect_from(base: &Path) -> Result<Vec<UsageEntry>, AppError> {
-    collect_from_with(base, None)
-}
-
 fn collect_from_with(base: &Path, threads: Option<usize>) -> Result<Vec<UsageEntry>, AppError> {
     let mut files = Vec::new();
     for file in load::discover_files(base, "json", MAX_DEPTH) {
@@ -216,6 +210,12 @@ fn parse_message(msg: &Value) -> Option<(String, UsageEntry)> {
             None,
         ),
     ))
+}
+
+/// 测试便捷入口(auto 线程); 生产路径经 collect(threads)
+#[cfg(test)]
+pub fn collect_from(base: &Path) -> Result<Vec<UsageEntry>, AppError> {
+    collect_from_with(base, None)
 }
 
 #[cfg(test)]

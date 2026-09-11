@@ -60,12 +60,6 @@ pub fn collect(threads: Option<usize>) -> Result<Vec<UsageEntry>, AppError> {
     collect_from_with(&roots, threads)
 }
 
-/// 测试便捷入口(auto 线程); 生产路径经 collect(threads)
-#[cfg(test)]
-pub fn collect_from(roots: &[PathBuf]) -> Result<Vec<UsageEntry>, AppError> {
-    collect_from_with(roots, None)
-}
-
 fn collect_from_with(
     roots: &[PathBuf],
     threads: Option<usize>,
@@ -198,6 +192,12 @@ fn parse_entry(
             self_cost,
         ),
     ))
+}
+
+/// 测试便捷入口(auto 线程); 生产路径经 collect(threads)
+#[cfg(test)]
+pub fn collect_from(roots: &[PathBuf]) -> Result<Vec<UsageEntry>, AppError> {
+    collect_from_with(roots, None)
 }
 
 #[cfg(test)]
