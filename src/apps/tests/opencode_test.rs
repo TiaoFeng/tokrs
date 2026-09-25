@@ -3,7 +3,17 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// 临时库: v2 形态(两表共存)
 fn temp_db() -> Connection {
+    temp_db_with(true)
+}
+
+/// 临时库: v1 老库(仅 message 表)
+fn temp_v1_db() -> Connection {
+    temp_db_with(false)
+}
+
+fn temp_db_with(with_session_message: bool) -> Connection {
     let path = std::env::temp_dir().join(format!(
         "tokrs-opencode-{}-{}.db",
         std::process::id(),
@@ -18,6 +28,12 @@ fn temp_db() -> Connection {
              CREATE TABLE message (id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT);",
         )
         .unwrap();
+    if with_session_message {
+        conn.execute_batch(
+            "CREATE TABLE session_message (id TEXT, session_id TEXT, type TEXT, time_created INTEGER, time_updated INTEGER, data TEXT);",
+        )
+        .unwrap();
+    }
     conn
 }
 
@@ -25,6 +41,15 @@ fn insert_message(conn: &Connection, id: &str, session_id: &str, data: &str) {
     conn.execute(
             "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?1, ?2, 1, 1, ?3)",
             [id, session_id, data],
+        )
+        .unwrap();
+}
+
+/// 插入 v2 session_message 行(kind 为 type 列: assistant/user/...)
+fn insert_session_message(conn: &Connection, id: &str, session_id: &str, kind: &str, data: &str) {
+    conn.execute(
+            "INSERT INTO session_message (id, session_id, type, time_created, time_updated, data) VALUES (?1, ?2, ?3, 1, 1, ?4)",
+            [id, session_id, kind, data],
         )
         .unwrap();
 }
@@ -77,6 +102,150 @@ fn test_parse_assistant_messages() {
     assert_eq!(e.session_id.as_deref(), Some("s1"));
     // 自报聚合成本被捕获
     assert_eq!(e.self_cost_usd, Some(0.42));
+}
+
+#[test]
+fn test_parse_v2_session_messages() {
+    let conn = temp_db();
+    // v2 形态: data 无 role, 模型为 model.id 对象, 角色由 type 列判定
+    insert_session_message(
+        &conn,
+        "m1",
+        "s1",
+        "assistant",
+        r#"{"time":{"created":1788256800000,"completed":1788256801000},"model":{"id":"openrouter/anthropic/Claude-Sonnet-4-5","providerID":"openrouter","variant":"max"},"cost":0.42,"tokens":{"input":10,"output":5,"reasoning":3,"cache":{"read":100,"write":20}}}"#,
+    );
+    // 未完成消息跳过(无 time.completed)
+    insert_session_message(
+        &conn,
+        "m2",
+        "s1",
+        "assistant",
+        r#"{"time":{"created":1788256800000},"model":{"id":"deepseek-v4"},"tokens":{"input":7,"output":0}}"#,
+    );
+
+    let db_path = std::path::Path::new(conn.path().unwrap()).to_path_buf();
+    drop(conn);
+    let entries = collect_from(&db_path).unwrap();
+    std::fs::remove_file(&db_path).ok();
+    assert_eq!(entries.len(), 1);
+    let e = &entries[0];
+    // model.id 归一化: 多级前缀剥除 + 小写
+    assert_eq!(e.model, "claude-sonnet-4-5");
+    assert_eq!(e.input_tokens, 10);
+    assert_eq!(e.output_tokens, 8);
+    assert_eq!(e.cache_read_tokens, 100);
+    assert_eq!(e.cache_creation_tokens, 20);
+    assert_eq!(e.created_at, 1_788_256_800);
+    assert_eq!(e.session_id.as_deref(), Some("s1"));
+    assert_eq!(e.self_cost_usd, Some(0.42));
+}
+
+#[test]
+fn test_cross_table_dedup_and_legacy_only() {
+    let conn = temp_db();
+    // 迁移重复行: 同 id 在 v1/v2 两表都有(用量一致), 跨表去重只计一次
+    insert_message(
+        &conn,
+        "dup",
+        "s1",
+        r#"{"role":"assistant","modelID":"deepseek-v4","tokens":{"input":10,"output":5,"reasoning":3,"cache":{"read":100,"write":20}},"time":{"created":1788256800000,"completed":1788256801000}}"#,
+    );
+    insert_session_message(
+        &conn,
+        "dup",
+        "s1",
+        "assistant",
+        r#"{"model":{"id":"deepseek-v4"},"tokens":{"input":10,"output":5,"reasoning":3,"cache":{"read":100,"write":20}},"time":{"created":1788256800000,"completed":1788256801000}}"#,
+    );
+    // 迁移漏行: 仅存在 message 表也必须入账
+    insert_message(
+        &conn,
+        "legacy",
+        "s1",
+        r#"{"role":"assistant","modelID":"m2","tokens":{"input":1,"output":2},"time":{"created":1788256800000,"completed":1788256801000}}"#,
+    );
+
+    let db_path = std::path::Path::new(conn.path().unwrap()).to_path_buf();
+    drop(conn);
+    let entries = collect_from(&db_path).unwrap();
+    std::fs::remove_file(&db_path).ok();
+    assert_eq!(entries.len(), 2);
+    assert!(
+        entries
+            .iter()
+            .any(|e| e.input_tokens == 10 && e.cache_read_tokens == 100)
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|e| e.model == "m2" && e.input_tokens == 1 && e.output_tokens == 2)
+    );
+}
+
+#[test]
+fn test_v2_ignores_non_assistant_types() {
+    let conn = temp_db();
+    insert_session_message(
+        &conn,
+        "m1",
+        "s1",
+        "user",
+        r#"{"time":{"created":1788256800000,"completed":1788256801000},"tokens":{"input":5,"output":5}}"#,
+    );
+    insert_session_message(
+        &conn,
+        "m2",
+        "s1",
+        "synthetic",
+        r#"{"time":{"created":1788256800000,"completed":1788256801000},"tokens":{"input":5,"output":5}}"#,
+    );
+
+    let db_path = std::path::Path::new(conn.path().unwrap()).to_path_buf();
+    drop(conn);
+    let entries = collect_from(&db_path).unwrap();
+    std::fs::remove_file(&db_path).ok();
+    assert!(entries.is_empty());
+}
+
+#[test]
+fn test_v1_db_without_session_message() {
+    let conn = temp_v1_db();
+    insert_message(
+        &conn,
+        "m1",
+        "s1",
+        r#"{"role":"assistant","modelID":"deepseek-v4","tokens":{"input":10,"output":5},"time":{"created":1788256800000,"completed":1788256801000}}"#,
+    );
+
+    let db_path = std::path::Path::new(conn.path().unwrap()).to_path_buf();
+    drop(conn);
+    let entries = collect_from(&db_path).unwrap();
+    std::fs::remove_file(&db_path).ok();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].model, "deepseek-v4");
+    assert_eq!(entries[0].input_tokens, 10);
+}
+
+#[test]
+fn test_v2_db_without_message_table() {
+    let conn = temp_db();
+    insert_session_message(
+        &conn,
+        "m1",
+        "s1",
+        "assistant",
+        r#"{"time":{"created":1788256800000,"completed":1788256801000},"model":{"id":"deepseek-v4"},"tokens":{"input":10,"output":5}}"#,
+    );
+    // 未来版本可能删除 message 表: 仅 session_message 也要正常
+    conn.execute_batch("DROP TABLE message").unwrap();
+
+    let db_path = std::path::Path::new(conn.path().unwrap()).to_path_buf();
+    drop(conn);
+    let entries = collect_from(&db_path).unwrap();
+    std::fs::remove_file(&db_path).ok();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].model, "deepseek-v4");
 }
 
 #[test]

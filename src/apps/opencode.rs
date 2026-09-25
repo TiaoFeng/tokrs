@@ -1,3 +1,8 @@
+//! opencode日志解析（更新并支持 v2）
+//!
+//! v2 起会话消息迁至 session_message 表
+//! v1 message 表冻结为历史行且可能含有迁移行. 需要双表读取并共享去重
+//!
 use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
 use std::{
@@ -31,6 +36,40 @@ fn db_path(home: &Path, xdg: Option<&OsStr>, custom: Option<&OsStr>) -> PathBuf 
     }
 }
 
+/// 日志(v1 message / v2 session_message)
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MessageTable {
+    /// v1: data.role 判断 assistant, 模型为 modelID 字符串
+    Message,
+    /// v2: SQL 按 type='assistant' 过滤, 不含 role, 模型为 model.id 对象
+    SessionMessage,
+}
+
+impl MessageTable {
+    /// 库内表名(常量字面值)
+    fn name(self) -> &'static str {
+        match self {
+            MessageTable::Message => "message",
+            MessageTable::SessionMessage => "session_message",
+        }
+    }
+
+    /// 两代查询语句(v2 在 SQL 层过滤 assistant, v1 交给 parse 按照 role 过滤)
+    fn sql(self) -> &'static str {
+        match self {
+            MessageTable::Message => "SELECT session_id, id, data FROM message",
+            MessageTable::SessionMessage => {
+                "SELECT session_id, id, data FROM session_message WHERE type = 'assistant'"
+            }
+        }
+    }
+
+    /// v1 data 含有 role 需要校验; v2 已由 type 列过滤
+    fn requires_role(self) -> bool {
+        self == MessageTable::Message
+    }
+}
+
 pub fn collect() -> Result<Vec<UsageEntry>, AppError> {
     let home = load::home_dir()?;
     let db = db_path(
@@ -57,11 +96,33 @@ pub fn collect_from(db_path: &Path) -> Result<Vec<UsageEntry>, AppError> {
     ) else {
         return Ok(Vec::new());
     };
+    // v2 session_message 优先, 之后读取 v1 message 中的记录;
+    // 两表共享 seen(session_id:message_id) 跨表去重, 不会重复计算
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut entries = Vec::new();
+    for table in [MessageTable::SessionMessage, MessageTable::Message] {
+        if table_exists(&conn, table.name()) {
+            collect_table(&conn, db_path, table, &mut seen, &mut entries);
+        }
+    }
+    progress::stderr_note(">_: opencode: done");
+    Ok(entries)
+}
+
+/// 单表收集: prepare/查询失败警告后跳过该表(不中止全局),
+/// 行级失败警告后保留已收集条目
+fn collect_table(
+    conn: &Connection,
+    db_path: &Path,
+    table: MessageTable,
+    seen: &mut HashSet<String>,
+    entries: &mut Vec<UsageEntry>,
+) {
     let Some(mut stmt) = warn_sqlite(
-        conn.prepare("SELECT session_id, id, data FROM message")
+        conn.prepare(table.sql())
             .map_err(|e| sqlite_err(db_path, e)),
     ) else {
-        return Ok(Vec::new());
+        return;
     };
     let Some(rows) = warn_sqlite(
         stmt.query_map([], |row| {
@@ -73,11 +134,9 @@ pub fn collect_from(db_path: &Path) -> Result<Vec<UsageEntry>, AppError> {
         })
         .map_err(|e| sqlite_err(db_path, e)),
     ) else {
-        return Ok(Vec::new());
+        return;
     };
 
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut entries = Vec::new();
     for row in rows {
         let (session_id, message_id, data) = match row {
             Ok(row) => row,
@@ -93,10 +152,18 @@ pub fn collect_from(db_path: &Path) -> Result<Vec<UsageEntry>, AppError> {
         if !seen.insert(format!("{session_id}:{message_id}")) {
             continue;
         }
-        parse_message(&data, &session_id, &mut entries);
+        parse_message(&data, &session_id, table, entries);
     }
-    progress::stderr_note(">_: opencode: done");
-    Ok(entries)
+}
+
+/// 表是否存在(v1 库无 session_message, v2 库两表共存; 未来删表也不误报)
+fn table_exists(conn: &Connection, name: &str) -> bool {
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        [name],
+        |_| Ok(()),
+    )
+    .is_ok()
 }
 
 /// sqlite 步骤失败统一警告; 调用方按"该源空结果"继续, 不中止全局
@@ -110,11 +177,12 @@ fn warn_sqlite<T>(result: Result<T, AppError>) -> Option<T> {
     }
 }
 
-fn parse_message(data: &str, session_id: &str, entries: &mut Vec<UsageEntry>) {
+fn parse_message(data: &str, session_id: &str, table: MessageTable, entries: &mut Vec<UsageEntry>) {
     let Ok(value) = serde_json::from_str::<Value>(data) else {
         return;
     };
-    if load::str_get(&value, &["role"]) != Some("assistant") {
+    // v1 按 data.role 判断 assistant; v2 由 type 列筛选
+    if table.requires_role() && load::str_get(&value, &["role"]) != Some("assistant") {
         return;
     }
     if value.get("tokens").and_then(Value::as_object).is_none() {
@@ -143,8 +211,10 @@ fn parse_message(data: &str, session_id: &str, entries: &mut Vec<UsageEntry>) {
         return;
     }
 
-    let model =
-        load::str_get(&value, &["modelID"]).map_or_else(|| "unknown".to_string(), normalize_model);
+    // 模型: v1 为 modelID 字符串, v2 为 model.id 对象, 空值统一记作 unknown
+    let model = load::str_get(&value, &["modelID"])
+        .or_else(|| load::str_get(&value, &["model", "id"]))
+        .map_or_else(|| "unknown".to_string(), normalize_model);
     let created_at = value
         .get("time")
         .and_then(|t| t.get("created"))
