@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/language-Rust-orange.svg)](https://www.rust-lang.org/)
 
-使用 Rust 编写的本地 Token 用量统计 CLI。读取 Claude Code、Codex、OpenCode、Gemini CLI、Grok Build、Pi、Kimi Code、Deepseek Harness 在本地留下的日志/数据库文件，统计各 app、各模型、各日期的 Token 消耗与成本。无守护进程、无网络请求、对数据源只读。
+使用 Rust 编写的本地 Token 用量统计 CLI。读取 Claude Code、Codex、OpenCode V2 (V1)、Gemini CLI、Grok Build、Pi、Kimi Code、Deepseek Harness 在本地留下的日志/数据库文件，统计各 app、各模型、各日期的 Token 消耗与成本。无守护进程、无网络请求、对数据源只读。
 
 > 本工具仅在运行时扫描日志/数据库，不保存日志或持久化记录。因此统计的数据仅代表当下本地日志/数据库中的token总量。结果会因删除了一些对话而小于cc-switch
 

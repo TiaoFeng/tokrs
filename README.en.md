@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/language-Rust-orange.svg)](https://www.rust-lang.org/)
 
-A local token usage statistics CLI written in Rust. It reads log and database files left on the local machine by Claude Code, Codex, OpenCode, Gemini CLI, Grok Build, Pi, Kimi Code, and Deepseek Harness to track token consumption and costs by app, model, and date. It has no daemon processes, makes no network requests, and accesses data sources in read-only mode.
+A local token usage statistics CLI written in Rust. It reads log and database files left on the local machine by Claude Code, Codex, OpenCode V2 (V1), Gemini CLI, Grok Build, Pi, Kimi Code, and Deepseek Harness to track token consumption and costs by app, model, and date. It has no daemon processes, makes no network requests, and accesses data sources in read-only mode.
 
 > This tool only scans logs and databases at runtime; it does not save logs or persist records. Therefore, the statistics represent only the total number of tokens currently in the local logs and databases. The results may be lower than those from cc-switch due to the deletion of some conversations.
 
