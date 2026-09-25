@@ -97,12 +97,18 @@ pub fn collect_from(db_path: &Path) -> Result<Vec<UsageEntry>, AppError> {
         return Ok(Vec::new());
     };
     // v2 session_message 优先, 之后读取 v1 message 中的记录;
-    // 两表共享 seen(session_id:message_id) 跨表去重, 不会重复计算
-    let mut seen: HashSet<String> = HashSet::new();
+    // 两表共享 seen((session_id, message_id)) 跨表去重, 不会重复计算
+    let mut seen: HashSet<(String, String)> = HashSet::new();
     let mut entries = Vec::new();
-    for table in [MessageTable::SessionMessage, MessageTable::Message] {
-        if table_exists(&conn, table.name()) {
-            collect_table(&conn, db_path, table, &mut seen, &mut entries);
+    'tables: for table in [MessageTable::SessionMessage, MessageTable::Message] {
+        match table_exists(&conn, table.name()) {
+            Ok(true) => collect_table(&conn, db_path, table, &mut seen, &mut entries),
+            Ok(false) => {}
+            Err(e) => {
+                // 库级失败(损坏/不可读): 警告后保留已收集条目, 不中止全局
+                load::warn_file(&sqlite_err(db_path, e));
+                break 'tables;
+            }
         }
     }
     progress::stderr_note(">_: opencode: done");
@@ -115,7 +121,7 @@ fn collect_table(
     conn: &Connection,
     db_path: &Path,
     table: MessageTable,
-    seen: &mut HashSet<String>,
+    seen: &mut HashSet<(String, String)>,
     entries: &mut Vec<UsageEntry>,
 ) {
     let Some(mut stmt) = warn_sqlite(
@@ -149,21 +155,33 @@ fn collect_table(
         let Some(session_id) = session_id else {
             continue;
         };
-        if !seen.insert(format!("{session_id}:{message_id}")) {
+        let key = (session_id, message_id);
+        if seen.contains(&key) {
             continue;
         }
-        parse_message(&data, &session_id, table, entries);
+        // 仅成功入账才占用去重键: v2 行无效(未完成/损坏/全零)时,
+        // 同 id 的 v1 兜底行仍可入账, 先成功者胜不双算
+        if let Some(entry) = parse_message(&data, key.0.as_str(), table) {
+            seen.insert(key);
+            entries.push(entry);
+        }
     }
 }
 
 /// 表是否存在(v1 库无 session_message, v2 库两表共存; 未来删表也不误报)
-fn table_exists(conn: &Connection, name: &str) -> bool {
-    conn.query_row(
+///
+/// 仅"无此行"(QueryReturnedNoRows)视为表缺失返回 Ok(false); 其余错误(如损坏库
+/// not a database)原样 Err, 由调用方警告——区分"无表"与"读不了库"
+fn table_exists(conn: &Connection, name: &str) -> Result<bool, rusqlite::Error> {
+    match conn.query_row(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
         [name],
         |_| Ok(()),
-    )
-    .is_ok()
+    ) {
+        Ok(()) => Ok(true),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
+        Err(e) => Err(e),
+    }
 }
 
 /// sqlite 步骤失败统一警告; 调用方按"该源空结果"继续, 不中止全局
@@ -177,21 +195,22 @@ fn warn_sqlite<T>(result: Result<T, AppError>) -> Option<T> {
     }
 }
 
-fn parse_message(data: &str, session_id: &str, table: MessageTable, entries: &mut Vec<UsageEntry>) {
-    let Ok(value) = serde_json::from_str::<Value>(data) else {
-        return;
-    };
+/// 解析单条消息为用量条目
+///
+/// 无效行返回 None(角色不符 / JSON 损坏 / 无 tokens / 未完成 / 全零且无自报成本);
+/// 调用方仅在 Some 后占用去重键, 使 v2 无效时同 id 的 v1 兜底行仍可入账
+fn parse_message(data: &str, session_id: &str, table: MessageTable) -> Option<UsageEntry> {
+    let value = serde_json::from_str::<Value>(data).ok()?;
     // v1 按 data.role 判断 assistant; v2 由 type 列筛选
     if table.requires_role() && load::str_get(&value, &["role"]) != Some("assistant") {
-        return;
+        return None;
     }
-    if value.get("tokens").and_then(Value::as_object).is_none() {
-        return;
-    }
-    // completed 为数字时间戳(ms), 仅做存在性判断(未完成消息跳过)
-    if value.get("time").and_then(|t| t.get("completed")).is_none() {
-        return;
-    }
+    // 无 tokens 对象 / completed 非整数时间戳(ms; 缺失/null/字符串/浮点)均无效
+    value.get("tokens").and_then(Value::as_object)?;
+    value
+        .get("time")
+        .and_then(|t| t.get("completed"))
+        .and_then(Value::as_i64)?;
 
     let input = load::u64_get(&value, &["tokens", "input"]);
     let output = load::u64_get(&value, &["tokens", "output"]);
@@ -208,7 +227,7 @@ fn parse_message(data: &str, session_id: &str, table: MessageTable, entries: &mu
         && cache_write == 0
         && self_cost.is_none()
     {
-        return;
+        return None;
     }
 
     // 模型: v1 为 modelID 字符串, v2 为 model.id 对象, 空值统一记作 unknown
@@ -221,7 +240,7 @@ fn parse_message(data: &str, session_id: &str, table: MessageTable, entries: &mu
         .and_then(load::timestamp_to_epoch)
         .unwrap_or_else(load::now_epoch);
 
-    entries.push(UsageEntry::new(
+    Some(UsageEntry::new(
         AppKind::OpenCode,
         model,
         Some(session_id.to_string()),
@@ -231,7 +250,7 @@ fn parse_message(data: &str, session_id: &str, table: MessageTable, entries: &mu
         cache_read,
         cache_write,
         self_cost,
-    ));
+    ))
 }
 
 #[cfg(test)]

@@ -123,6 +123,14 @@ fn test_parse_v2_session_messages() {
         "assistant",
         r#"{"time":{"created":1788256800000},"model":{"id":"deepseek-v4"},"tokens":{"input":7,"output":0}}"#,
     );
+    // completed 为 null: 非整数时间戳, 同样视为未完成跳过
+    insert_session_message(
+        &conn,
+        "m3",
+        "s1",
+        "assistant",
+        r#"{"time":{"created":1788256800000,"completed":null},"model":{"id":"deepseek-v4"},"tokens":{"input":9,"output":9}}"#,
+    );
 
     let db_path = std::path::Path::new(conn.path().unwrap()).to_path_buf();
     drop(conn);
@@ -181,6 +189,51 @@ fn test_cross_table_dedup_and_legacy_only() {
             .iter()
             .any(|e| e.model == "m2" && e.input_tokens == 1 && e.output_tokens == 2)
     );
+}
+
+#[test]
+fn test_v2_invalid_rows_fall_back_to_legacy() {
+    let conn = temp_db();
+    // v2 未完成(缺 completed): 不能占用去重键, 同 id 的 v1 有效行兜底
+    insert_session_message(
+        &conn,
+        "m1",
+        "s1",
+        "assistant",
+        r#"{"time":{"created":1788256800000},"model":{"id":"v2-model"},"tokens":{"input":7,"output":0}}"#,
+    );
+    insert_message(
+        &conn,
+        "m1",
+        "s1",
+        r#"{"role":"assistant","modelID":"v1-model","tokens":{"input":10,"output":5},"time":{"created":1788256800000,"completed":1788256801000}}"#,
+    );
+    // v2 JSON 损坏: 同样回退同 id 的 v1 行
+    insert_session_message(&conn, "m2", "s1", "assistant", "{not json");
+    insert_message(
+        &conn,
+        "m2",
+        "s1",
+        r#"{"role":"assistant","modelID":"v1-model-2","tokens":{"input":1,"output":2},"time":{"created":1788256800000,"completed":1788256801000}}"#,
+    );
+
+    let db_path = std::path::Path::new(conn.path().unwrap()).to_path_buf();
+    drop(conn);
+    let entries = collect_from(&db_path).unwrap();
+    std::fs::remove_file(&db_path).ok();
+    assert_eq!(entries.len(), 2);
+    // 实际入账的是 v1 数据(v2 的模型/数值被丢弃且不重复计数)
+    assert!(
+        entries
+            .iter()
+            .any(|e| e.model == "v1-model" && e.input_tokens == 10 && e.output_tokens == 5)
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|e| e.model == "v1-model-2" && e.input_tokens == 1 && e.output_tokens == 2)
+    );
+    assert!(!entries.iter().any(|e| e.model == "v2-model"));
 }
 
 #[test]
@@ -291,6 +344,31 @@ fn test_corrupted_db_warns_and_empty() {
     std::fs::write(&path, "not a sqlite db").unwrap();
     // DB 损坏: 警告后返回空结果, 不再 Err 中止全局
     assert!(collect_from(&path).unwrap().is_empty());
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn test_table_exists_distinguishes_missing_and_error() {
+    // 正常库: 存在的表 true, 缺失表 false(静默跳过)
+    let conn = temp_db();
+    assert!(table_exists(&conn, "message").unwrap());
+    assert!(!table_exists(&conn, "no_such_table").unwrap());
+    drop(conn);
+
+    // 损坏库: open 成功(header 延迟读取), 首次查询报 not a database;
+    // 必须区分"表不存在"与"库读不了", 返回 Err 交给调用方警告
+    let path = std::env::temp_dir().join(format!(
+        "tokrs-opencode-corrupt-te-{}-{}.db",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::write(&path, "not a sqlite db").unwrap();
+    let conn = Connection::open(&path).unwrap();
+    assert!(table_exists(&conn, "message").is_err());
+    drop(conn);
     std::fs::remove_file(&path).ok();
 }
 
