@@ -160,7 +160,7 @@ fn collect_table(
             continue;
         }
         // 仅成功入账才占用去重键: v2 行无效(未完成/损坏/全零)时,
-        // 同 id 的 v1 兜底行仍可入账, 先成功者胜不双算
+        // 同 id 的 v1 行仍可入账, 先成功者胜, 并且不重复计算
         if let Some(entry) = parse_message(&data, key.0.as_str(), table) {
             seen.insert(key);
             entries.push(entry);
@@ -170,8 +170,8 @@ fn collect_table(
 
 /// 表是否存在(v1 库无 session_message, v2 库两表共存; 未来删表也不误报)
 ///
-/// 仅"无此行"(QueryReturnedNoRows)视为表缺失返回 Ok(false); 其余错误(如损坏库
-/// not a database)原样 Err, 由调用方警告——区分"无表"与"读不了库"
+/// 仅"无此行"(QueryReturnedNoRows)视为表缺失返回 Ok(false); 其余错误(如损坏库/not a database)原样 Err, 
+/// 由调用方警告 —— 区分"无表"与"读不了库"
 fn table_exists(conn: &Connection, name: &str) -> Result<bool, rusqlite::Error> {
     match conn.query_row(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
@@ -198,7 +198,7 @@ fn warn_sqlite<T>(result: Result<T, AppError>) -> Option<T> {
 /// 解析单条消息为用量条目
 ///
 /// 无效行返回 None(角色不符 / JSON 损坏 / 无 tokens / 未完成 / 全零且无自报成本);
-/// 调用方仅在 Some 后占用去重键, 使 v2 无效时同 id 的 v1 兜底行仍可入账
+/// 调用方仅在 Some 后占用去重键, 使 v2 无效时同 id 的 v1 可以兜底入账
 fn parse_message(data: &str, session_id: &str, table: MessageTable) -> Option<UsageEntry> {
     let value = serde_json::from_str::<Value>(data).ok()?;
     // v1 按 data.role 判断 assistant; v2 由 type 列筛选
