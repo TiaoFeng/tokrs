@@ -170,7 +170,7 @@ fn collect_table(
 
 /// 表是否存在(v1 库无 session_message, v2 库两表共存; 未来删表也不误报)
 ///
-/// 仅"无此行"(QueryReturnedNoRows)视为表缺失返回 Ok(false); 其余错误(如损坏库/not a database)原样 Err, 
+/// 仅"无此行"(QueryReturnedNoRows)视为表缺失返回 Ok(false); 其余错误(如损坏库/not a database)原样 Err,
 /// 由调用方警告 —— 区分"无表"与"读不了库"
 fn table_exists(conn: &Connection, name: &str) -> Result<bool, rusqlite::Error> {
     match conn.query_row(
