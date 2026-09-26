@@ -437,6 +437,35 @@ fn test_auto_resolution_streamed_and_last_wins() {
 }
 
 #[test]
+fn test_auto_model_switch_between_requests() {
+    let user = temp_dir();
+    // 同一会话相邻两次 auto 请求解析到不同模型: 各自独立入账, 分开计价
+    write_session(
+        &user,
+        "nn44",
+        "sess_switch",
+        &[
+            init_op("sess_switch", 1),
+            r#"{"kind":2,"k":["requests"],"i":null,"v":[{"requestId":"request_1","modelId":"copilot/auto","timestamp":1790900000000,"response":[{"kind":"autoModeResolution","resolved":{"id":"gpt-5.6-luna","name":"Luna"}}]}]}"#
+                .to_string(),
+            set_op(0, "completionTokens", "10"),
+            r#"{"kind":2,"k":["requests"],"i":null,"v":[{"requestId":"request_2","modelId":"copilot/auto","timestamp":1790900001000,"response":[{"kind":"autoModeResolution","resolved":{"id":"mai-code-1.1-flash","name":"MAI"}}]}]}"#
+                .to_string(),
+            set_op(1, "completionTokens", "20"),
+        ],
+    );
+    let mut entries = collect_from(&user).unwrap();
+    entries.sort_by_key(|e| e.model.clone());
+    let got: Vec<(&str, u64)> = entries
+        .iter()
+        .map(|e| (e.model.as_str(), e.output_tokens))
+        .collect();
+    // 切换即分流: 两条请求分别归入各自实际模型
+    assert_eq!(got, vec![("gpt-5.6-luna", 10), ("mai-code-1.1-flash", 20)]);
+    fs::remove_dir_all(&user).ok();
+}
+
+#[test]
 fn test_empty_window_session_discovered() {
     let user = temp_dir();
     write_empty_window(
