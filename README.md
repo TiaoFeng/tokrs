@@ -263,7 +263,7 @@ src/
 │   ├── pi.rs         # ~/.pi/agent/sessions/*.jsonl
 │   ├── kimi.rs       # ~/.kimi-code/sessions/**/agents/*/wire.jsonl
 │   ├── dsh.rs        # ~/.dsh/sessions/**/session-*/session.jsonl.zstd
-│   ├── copilot.rs    # ~/workspaceStorage/*/chatSessions/*.jsonl
+│   ├── copilot.rs    # ~/.config/Code/User/workspaceStorage/*/chatSessions/*.jsonl
 │   ├── prince.rs     # pricing.json 定价（版本价 / 长上下文 / 峰时 / force）
 │   └── tests/        # 单元测试
 ├── io/
