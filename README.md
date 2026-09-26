@@ -229,7 +229,7 @@ mkdir -p ~/.config/tokrs && cp pricing.json ~/.config/tokrs/
 | Pi | `$PI_CODING_AGENT_SESSION_DIR` > `$PI_CODING_AGENT_DIR/sessions` > `~/.pi/agent/sessions`（旧布局 `~/.pi/sessions` 兜底） | 按 `entry.id` / 内容哈希去重 |
 | Kimi | `<数据根>/sessions/**/agents/*/wire.jsonl`（根可用 `$KIMI_CODE_HOME` 覆盖，默认 `~/.kimi-code`） | `usage.record` 每调用面值，model 统一归一化（剥 provider 前缀/小写，全 app 同款），内容签名去重（fork 副本不双算） |
 | dsh | `$DSH_HOME`（默认 `~/.dsh`）/sessions/**/session-*/session.jsonl.zstd | zstd 压缩 JSONL，逐行流式解压；`assistant/message` 事件；首行须为 `type:"session"` header；按 `message.id`（缺内容哈希兜底）first-wins 去重 |
-| Copilot | `<用户目录>/workspaceStorage/*/chatSessions/*.jsonl`（空窗口：`<用户目录>/globalStorage/emptyWindowChatSessions/*.jsonl`；用户目录默认 `~/.config/Code/User`） | VS Code 聊天会话操作日志，按每请求 `promptTokens`/`completionTokens` 面值统计；`requestId` 去重；无缓存拆分（input 即 `promptTokens`）；扩展模型 id 装饰（命名空间/`::` 变体）已剥除以对齐统一模型名；Auto 模式模型显示为 `auto` |
+| Copilot | `<用户目录>/workspaceStorage/*/chatSessions/*.jsonl`（空窗口：`<用户目录>/globalStorage/emptyWindowChatSessions/*.jsonl`；用户目录默认 `~/.config/Code/User`） | VS Code 聊天会话操作日志，按每请求 `promptTokens`/`completionTokens` 面值统计；`requestId` 去重；无缓存拆分（input 即 `promptTokens`）；扩展模型 id 装饰（命名空间/`::` 变体）已剥除以对齐统一模型名；Auto 模式模型经 `autoModeResolution` 解析为实际模型（缺失时回退 `auto`） |
 
 > 环境变量路径支持 `~` 前缀展开，但须为绝对路径；非法值（如相对路径）会警告并回退默认。
 

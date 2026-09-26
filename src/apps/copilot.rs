@@ -8,14 +8,15 @@
 //! `kind:1` 设置路径值, `kind:2` 数组插入(`i` 缺省/null 追加, 否则插入到索引处);
 //! 每个请求完成时由 `["requests", i, "promptTokens"/"completionTokens"]` 的 set 操作
 //! 流式写入用量(末值为准), 未完成/取消的请求永不写入 -> 天然跳过.
-//! 解析只追踪 requests 子路径(轻量 replay), 其余路径(inputState/customTitle/response
-//! 等)一概忽略; response 巨型推送行不含 needle 字面量, 零解析跳过
+//! 解析只追踪 requests 子路径(轻量 replay), 其余路径(inputState/customTitle/response等)一概忽略;
+//! response 巨型推送行除 Auto 解析片段外不含 needle 字面量, 零解析跳过
 //!
 //! 语义:
 //! - input 直用 promptTokens(上游未暴露缓存拆分, 无法归一, cache 恒 0,
-//!   不经 fresh_input;
+//!   不经 fresh_input);
 //! - output 为 completionTokens; 无自报成本, 交由定价表估价;
-//! - copilot/auto(Auto 模式)实际模型不落盘, 按 "auto" 入账;
+//! - copilot/auto(Auto 模式)的实际模型经响应流中 autoModeResolution 片段还原
+//!   (resolved.id, 末次为准), 缺失时按 "auto" 兜底;
 //! - modelId 先经 decode_model_id 解码 VS Code 标识
 //!   (取模型段并剥扩展命名空间/variant 装饰)再经 apps::normalize_model 统一归一
 //!
@@ -38,22 +39,29 @@ use crate::{
     model::{AppKind, UsageEntry},
 };
 
-/// 工作区会话目录深度: <User>/workspaceStorage/<哈希>/chatSessions/<文件>.jsonl
+/// 工作区会话目录深度: `<User>/workspaceStorage/<哈希>/chatSessions/<文件>.jsonl`
 const MAX_DEPTH: usize = 2;
 
 /// 行级预过滤 needle
 ///
-/// 四个均为结构字面量(JSON 转义保证不会命中字符串内容):
-/// - 请求表推送 `["requests"]`, 以及 token/模型字段的 set 操作
-///   (如 `["requests",0,"promptTokens"]`);
-/// - response 巨型推送行(`["requests",0,"response"]`)不匹配任一 needle -> 零解析跳过.
+/// 五个均为结构字面量(JSON 转义保证不会命中字符串内容):
+/// - 请求表推送 `["requests"]`, token/模型字段的 set 操作
+///   (如 `["requests",0,"promptTokens"]`),
+///   携带 Auto 解析的响应片段(`autoModeResolution`);
+/// - 其余 response 巨型推送行不匹配任一 needle -> 零解析跳过.
 /// - 首行 init 由 load 的首行不过滤规则保障(sessionId/creationDate 兜底依赖它)
-const COPILOT_LINE_NEEDLES: [&str; 4] = [
+const COPILOT_LINE_NEEDLES: [&str; 5] = [
     "[\"requests\"]",
     "\"promptTokens\"",
     "\"completionTokens\"",
     "\"modelId\"",
+    "\"autoModeResolution\"",
 ];
+
+/// 操作类型(操作日志的 kind 字段) 0 初始状态 / 1 设置路径值 / 2 数组插入
+const OP_INIT: u64 = 0; // 初始状态
+const OP_SET: u64 = 1; // 设置路径值
+const OP_PUSH: u64 = 2; // 数组插入
 
 /// copilot 数据根: VS Code stable 用户目录
 ///
@@ -160,6 +168,8 @@ struct Replay {
 struct Skeleton {
     request_id: Option<String>,
     model: Option<String>,
+    /// Auto 模式实际模型(响应片段 autoModeResolution 的 resolved.id)
+    resolved_model: Option<String>,
     timestamp: Option<i64>,
     response_timestamp: Option<i64>,
     prompt_tokens: u64,
@@ -169,15 +179,31 @@ struct Skeleton {
 impl Skeleton {
     /// 从请求对象提取用量字段(缺失保持默认)
     fn from_request(value: &Value) -> Self {
-        Skeleton {
+        let mut skeleton = Skeleton {
             request_id: load::str_get_nonempty(value, &["requestId"]).map(str::to_string),
             model: load::str_get_nonempty(value, &["modelId"]).map(str::to_string),
+            resolved_model: None,
             timestamp: value.get("timestamp").and_then(load::timestamp_to_epoch),
             response_timestamp: value
                 .get("responseTimestamp")
                 .and_then(load::timestamp_to_epoch),
             prompt_tokens: load::u64_get(value, &["promptTokens"]),
             completion_tokens: load::u64_get(value, &["completionTokens"]),
+        };
+        if let Some(parts) = value.get("response").and_then(Value::as_array) {
+            skeleton.absorb_response(parts);
+        }
+        skeleton
+    }
+
+    /// 从响应片段提取 Auto 模式解析结果(autoModeResolution, 流式追加末次为准)
+    fn absorb_response(&mut self, parts: &[Value]) {
+        for part in parts {
+            if load::str_get(part, &["kind"]) == Some("autoModeResolution")
+                && let Some(id) = load::str_get_nonempty(part, &["resolved", "id"])
+            {
+                self.resolved_model = Some(id.to_string());
+            }
         }
     }
 }
@@ -186,56 +212,73 @@ impl Replay {
     /// 应用一行操作: 只处理 requests 路径, 其余(kind/路径双重过滤下)忽略
     fn apply(&mut self, op: &Value) {
         match op.get("kind").and_then(Value::as_u64) {
-            // 初始状态: 记录会话 ID/创建时间, 并创建 requests 基底
-            // (正常为空数组, 快照恢复时可能非空)
-            Some(0) => {
-                let Some(state) = op.get("v") else { return };
-                self.session_id = load::str_get_nonempty(state, &["sessionId"]).map(str::to_string);
-                self.created = state.get("creationDate").and_then(load::timestamp_to_epoch);
-                if let Some(list) = state.get("requests").and_then(Value::as_array) {
-                    self.requests = list.iter().map(Skeleton::from_request).collect();
+            Some(OP_INIT) => self.apply_init(op),
+            Some(OP_SET) => self.apply_set(op),
+            Some(OP_PUSH) => self.apply_push(op),
+            _ => {}
+        }
+    }
+
+    /// kind 0 初始状态(`OP_INIT`): 记录会话 ID/创建时间, 并创建 requests 基底
+    /// (正常为空数组, 快照恢复时可能非空)
+    fn apply_init(&mut self, op: &Value) {
+        let Some(state) = op.get("v") else { return };
+        self.session_id = load::str_get_nonempty(state, &["sessionId"]).map(str::to_string);
+        self.created = state.get("creationDate").and_then(load::timestamp_to_epoch);
+        if let Some(list) = state.get("requests").and_then(Value::as_array) {
+            self.requests = list.iter().map(Skeleton::from_request).collect();
+        }
+    }
+
+    /// kind 1 设置路径值(OP_SET): ["requests"] 整表替换 / ["requests", i] 整请求替换 /
+    /// ["requests", i, 字段] 字段更新(流式覆写, 末值为准); 后两者为防御分支
+    fn apply_set(&mut self, op: &Value) {
+        let Some(path) = op.get("k").and_then(Value::as_array) else {
+            return;
+        };
+        if path.first().and_then(Value::as_str) != Some("requests") {
+            return;
+        }
+        match path.as_slice() {
+            [_] => {
+                self.requests = op
+                    .get("v")
+                    .and_then(Value::as_array)
+                    .map(|list| list.iter().map(Skeleton::from_request).collect())
+                    .unwrap_or_default();
+            }
+            [_, idx] => {
+                let Some(idx) = idx.as_u64() else { return };
+                if let Some(value) = op.get("v") {
+                    *self.slot(idx) = Skeleton::from_request(value);
                 }
             }
-            // 设置路径值: ["requests"] 整表替换 / ["requests", i] 整请求替换 /
-            // ["requests", i, 字段] 字段更新(流式覆写, 末值为准); 后两者为防御分支
-            Some(1) => {
-                let Some(path) = op.get("k").and_then(Value::as_array) else {
+            [_, idx, field] => {
+                let (Some(idx), Some(field)) = (idx.as_u64(), field.as_str()) else {
                     return;
                 };
-                if path.first().and_then(Value::as_str) != Some("requests") {
-                    return;
-                }
-                match path.len() {
-                    1 => {
-                        self.requests = op
-                            .get("v")
-                            .and_then(Value::as_array)
-                            .map(|list| list.iter().map(Skeleton::from_request).collect())
-                            .unwrap_or_default();
-                    }
-                    2 => {
-                        let Some(idx) = path[1].as_u64() else { return };
-                        if let Some(value) = op.get("v") {
-                            *self.slot(idx) = Skeleton::from_request(value);
+                match field {
+                    // 整表替换响应数组(防御分支): 吸收其中可能携带的 Auto 解析片段
+                    "response" => {
+                        if let Some(parts) = op.get("v").and_then(Value::as_array) {
+                            self.slot(idx).absorb_response(parts);
                         }
                     }
-                    3 => {
-                        let (Some(idx), Some(field)) = (path[1].as_u64(), path[2].as_str()) else {
-                            return;
-                        };
-                        self.set_field(idx, field, op);
-                    }
-                    _ => {}
+                    _ => self.set_field(idx, field, op),
                 }
             }
-            // 数组插入: 仅请求表推送 ["requests"]; i 缺省/null 追加, 否则插入到索引处
-            Some(2) => {
-                let Some(path) = op.get("k").and_then(Value::as_array) else {
-                    return;
-                };
-                if path.len() != 1 || path[0].as_str() != Some("requests") {
-                    return;
-                }
+            _ => {}
+        }
+    }
+
+    /// kind 2 数组插入(`OP_PUSH`): ["requests"] 请求表推送(i 缺省/null 追加, 否则插入到索引处);
+    /// ["requests", i, "response"] 响应片段推送(仅携带 Auto 解析片段的行经 needle 到达)
+    fn apply_push(&mut self, op: &Value) {
+        let Some(path) = op.get("k").and_then(Value::as_array) else {
+            return;
+        };
+        match path.as_slice() {
+            [only] if only.as_str() == Some("requests") => {
                 let items: Vec<Skeleton> = match op.get("v") {
                     Some(Value::Array(list)) => list.iter().map(Skeleton::from_request).collect(),
                     Some(value) => vec![Skeleton::from_request(value)],
@@ -249,6 +292,14 @@ impl Replay {
                 for (offset, skeleton) in items.into_iter().enumerate() {
                     self.requests.insert(at + offset, skeleton);
                 }
+            }
+            [_, idx, field] if field.as_str() == Some("response") => {
+                let (Some(idx), Some(parts)) =
+                    (idx.as_u64(), op.get("v").and_then(Value::as_array))
+                else {
+                    return;
+                };
+                self.slot(idx).absorb_response(parts);
             }
             _ => {}
         }
@@ -284,6 +335,7 @@ impl Replay {
     /// 产出用量条目
     ///
     /// - 跳过未完成(无 token)与全零请求;
+    /// - 模型优先级: Auto 解析结果 > 原始 modelId, 再统一解码/归一;
     /// - 键 = requestId 兜底 `stem:索引`, 文件内重复先到者入账
     fn into_entries(self, stem: &str) -> HashMap<String, UsageEntry> {
         let Replay {
@@ -310,10 +362,15 @@ impl Replay {
             let key = skeleton
                 .request_id
                 .unwrap_or_else(|| format!("{stem}:{idx}"));
-            let model = skeleton.model.as_deref().map_or_else(
-                || "unknown".to_string(),
-                |raw| normalize_model(&decode_model_id(raw)),
-            );
+            // 模型优先级: Auto 解析结果 > 原始 modelId; 统一解码/归一
+            let model = skeleton
+                .resolved_model
+                .as_deref()
+                .or(skeleton.model.as_deref())
+                .map_or_else(
+                    || "unknown".to_string(),
+                    |raw| normalize_model(&decode_model_id(raw)),
+                );
             candidates.entry(key).or_insert_with(|| {
                 UsageEntry::new(
                     AppKind::Copilot,

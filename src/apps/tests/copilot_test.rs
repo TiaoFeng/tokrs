@@ -383,6 +383,60 @@ fn test_set_ops_and_push_edges() {
 }
 
 #[test]
+fn test_auto_resolution_and_fallback() {
+    let user = temp_dir();
+    write_session(
+        &user,
+        "ll22",
+        "sess_auto",
+        &[
+            init_op("sess_auto", 1),
+            // 快照推送即含解析片段: copilot/auto -> gpt-5.6-luna
+            r#"{"kind":2,"k":["requests"],"i":null,"v":[{"requestId":"request_a","modelId":"copilot/auto","timestamp":1790800000000,"response":[{"kind":"autoModeResolution","resolved":{"id":"gpt-5.6-luna","name":"GPT-5.6 Luna"}},{"kind":"markdown"}]}]}"#
+                .to_string(),
+            set_op(0, "completionTokens", "10"),
+            // 无解析片段的 auto: 回退 auto
+            push_op(&request_obj("request_b", "copilot/auto", 1_790_800_100_000)),
+            set_op(1, "completionTokens", "20"),
+        ],
+    );
+    let mut entries = collect_from(&user).unwrap();
+    entries.sort_by_key(|e| e.model.clone());
+    let got: Vec<(&str, u64)> = entries
+        .iter()
+        .map(|e| (e.model.as_str(), e.output_tokens))
+        .collect();
+    assert_eq!(got, vec![("auto", 20), ("gpt-5.6-luna", 10)]);
+    fs::remove_dir_all(&user).ok();
+}
+
+#[test]
+fn test_auto_resolution_streamed_and_last_wins() {
+    let user = temp_dir();
+    write_session(
+        &user,
+        "mm33",
+        "sess_auto_stream",
+        &[
+            init_op("sess_auto_stream", 1),
+            push_op(&request_obj("request_s", "copilot/auto", 1_790_810_000_000)),
+            set_op(0, "completionTokens", "5"),
+            // 响应片段推送(流式): 经 autoModeResolution needle 到达
+            r#"{"kind":2,"k":["requests",0,"response"],"v":[{"kind":"autoModeResolution","resolved":{"id":"mai-code-1.1-flash","name":"MAI"}}]}"#
+                .to_string(),
+            // 整表替换响应数组(防御分支): 末次解析为准
+            r#"{"kind":1,"k":["requests",0,"response"],"v":[{"kind":"autoModeResolution","resolved":{"id":"gpt-5.6-luna","name":"Luna"}}]}"#
+                .to_string(),
+        ],
+    );
+    let entries = collect_from(&user).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].model, "gpt-5.6-luna");
+    assert_eq!(entries[0].output_tokens, 5);
+    fs::remove_dir_all(&user).ok();
+}
+
+#[test]
 fn test_empty_window_session_discovered() {
     let user = temp_dir();
     write_empty_window(
