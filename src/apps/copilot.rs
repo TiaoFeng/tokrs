@@ -277,8 +277,11 @@ impl Replay {
         let Some(path) = op.get("k").and_then(Value::as_array) else {
             return;
         };
+        if path.first().and_then(Value::as_str) != Some("requests") {
+            return;
+        }
         match path.as_slice() {
-            [only] if only.as_str() == Some("requests") => {
+            [_] => {
                 let items: Vec<Skeleton> = match op.get("v") {
                     Some(Value::Array(list)) => list.iter().map(Skeleton::from_request).collect(),
                     Some(value) => vec![Skeleton::from_request(value)],
