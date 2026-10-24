@@ -62,6 +62,10 @@ fn set_op(index: usize, field: &str, value: &str) -> String {
     format!(r#"{{"kind":1,"k":["requests",{index},"{field}"],"v":{value}}}"#)
 }
 
+fn result_op(index: usize, value: &str) -> String {
+    format!(r#"{{"kind":1,"k":["requests",{index},"result"],"v":{value}}}"#)
+}
+
 #[test]
 fn test_face_value_ingest_and_field_mapping() {
     let user = temp_dir();
@@ -121,7 +125,7 @@ fn test_streaming_last_value_wins() {
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].input_tokens, 20872);
     assert_eq!(entries[0].output_tokens, 2368);
-    // Auto 模式实际模型不落盘: copilot/auto 按 auto 入账
+    // 此用例没有 Auto 解析片段: copilot/auto 按 auto 入账
     assert_eq!(entries[0].model, "auto");
     fs::remove_dir_all(&user).ok();
 }
@@ -434,6 +438,161 @@ fn test_auto_resolution_streamed_and_last_wins() {
     assert_eq!(entries[0].model, "gpt-5.6-luna");
     assert_eq!(entries[0].output_tokens, 5);
     fs::remove_dir_all(&user).ok();
+}
+
+#[test]
+fn test_effective_model_priority() {
+    let cases = [
+        // auto: response > result > auto
+        (
+            Some("copilot/auto"),
+            Some("gpt-5.6-luna"),
+            Some("mai-code-1.1-flash"),
+            "gpt-5.6-luna",
+        ),
+        (
+            Some("copilot/auto"),
+            None,
+            Some("mai-code-1.1-flash"),
+            "mai-code-1.1-flash",
+        ),
+        (Some("copilot/auto"), None, None, "auto"),
+        // 明确 modelId 不被 response/result 覆盖
+        (
+            Some("customendpoint/opencode/omen-alpha"),
+            Some("gpt-5.6-luna"),
+            Some("gpt-5.6-luna"),
+            "omen-alpha",
+        ),
+        // modelId 缺失: response > result > unknown
+        (None, Some("gpt-5.6-luna"), Some("mai-code"), "gpt-5.6-luna"),
+        (None, None, Some("mai-code"), "mai-code"),
+        (None, None, None, "unknown"),
+    ];
+    for (model, resolved, result, want) in cases {
+        let skeleton = Skeleton {
+            model: model.map(str::to_string),
+            resolved_model: resolved.map(str::to_string),
+            result_model: result.map(str::to_string),
+            ..Skeleton::default()
+        };
+        let got = effective_model(&skeleton).map_or_else(
+            || "unknown".to_string(),
+            |raw| normalize_model(&decode_model_id(raw)),
+        );
+        assert_eq!(
+            got, want,
+            "model={model:?} resolved={resolved:?} result={result:?}"
+        );
+    }
+}
+
+#[test]
+fn test_auto_result_metadata_set() {
+    let user = temp_dir();
+    write_session(
+        &user,
+        "oo55",
+        "sess_auto_result",
+        &[
+            init_op("sess_auto_result", 1),
+            push_op(&request_obj("request_r", "copilot/auto", 1_790_820_000_000)),
+            set_op(0, "completionTokens", "7"),
+            // result 行只有 resolvedModel(无 promptTokens), 验证新增 needle 能命中
+            result_op(0, r#"{"metadata":{"resolvedModel":"gpt-5.6-luna"}}"#),
+        ],
+    );
+    let entries = collect_from(&user).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].model, "gpt-5.6-luna");
+    assert_eq!(entries[0].output_tokens, 7);
+    fs::remove_dir_all(&user).ok();
+}
+
+#[test]
+fn test_auto_result_metadata_in_push_snapshot() {
+    let user = temp_dir();
+    let request = r#"{"requestId":"request_snap_auto","modelId":"copilot/auto","timestamp":1790821000000,"completionTokens":9,"result":{"metadata":{"resolvedModel":"mai-code-1.1-flash"}}}"#;
+    write_session(
+        &user,
+        "pp66",
+        "sess_snap_auto",
+        &[init_op("sess_snap_auto", 1), push_op(request)],
+    );
+    let entries = collect_from(&user).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].model, "mai-code-1.1-flash");
+    assert_eq!(entries[0].output_tokens, 9);
+    fs::remove_dir_all(&user).ok();
+}
+
+#[test]
+fn test_auto_result_metadata_streamed_push() {
+    let user = temp_dir();
+    write_session(
+        &user,
+        "qq77",
+        "sess_result_push",
+        &[
+            init_op("sess_result_push", 1),
+            push_op(&request_obj("request_p", "copilot/auto", 1_790_830_000_000)),
+            set_op(0, "completionTokens", "3"),
+            r#"{"kind":2,"k":["requests",0,"result"],"v":{"metadata":{"resolvedModel":"claude-haiku-4-5-20251001"}}}"#
+                .to_string(),
+        ],
+    );
+    let entries = collect_from(&user).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].model, "claude-haiku-4-5-20251001");
+    assert_eq!(entries[0].output_tokens, 3);
+    fs::remove_dir_all(&user).ok();
+}
+
+#[test]
+fn test_explicit_model_ignores_resolved_metadata() {
+    let user = temp_dir();
+    let request = r#"{"requestId":"request_omena","modelId":"customendpoint/opencode/omen-alpha","timestamp":1790840000000,"completionTokens":3,"response":[{"kind":"autoModeResolution","resolved":{"id":"gpt-5.6-luna"}}],"result":{"metadata":{"resolvedModel":"gpt-5.6-luna"}}}"#;
+    write_session(
+        &user,
+        "rr88",
+        "sess_omena",
+        &[init_op("sess_omena", 1), push_op(request)],
+    );
+    let entries = collect_from(&user).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].model, "omen-alpha");
+    assert_eq!(entries[0].output_tokens, 3);
+    fs::remove_dir_all(&user).ok();
+}
+
+#[test]
+fn test_auto_response_priority_over_result_metadata() {
+    let user = temp_dir();
+    let request = r#"{"requestId":"request_prio","modelId":"copilot/auto","timestamp":1790850000000,"response":[{"kind":"autoModeResolution","resolved":{"id":"gpt-5.6-luna"}}]}"#;
+    write_session(
+        &user,
+        "ss99",
+        "sess_prio",
+        &[
+            init_op("sess_prio", 1),
+            push_op(request),
+            set_op(0, "completionTokens", "4"),
+            result_op(0, r#"{"metadata":{"resolvedModel":"mai-code-1.1-flash"}}"#),
+        ],
+    );
+    let entries = collect_from(&user).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].model, "gpt-5.6-luna");
+    fs::remove_dir_all(&user).ok();
+}
+
+#[test]
+fn test_absorb_result_ignores_empty_model() {
+    let mut skeleton = Skeleton::default();
+    let value: serde_json::Value =
+        serde_json::from_str(r#"{"metadata":{"resolvedModel":"  "}}"#).unwrap();
+    skeleton.absorb_result(&value);
+    assert!(skeleton.result_model.is_none());
 }
 
 #[test]
