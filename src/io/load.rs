@@ -11,7 +11,7 @@ use serde_json::Value;
 use std::{
     ffi::OsStr,
     fs,
-    io::{BufRead, BufReader, Read},
+    io::{BufRead, BufReader, IsTerminal, Read},
     path::{Path, PathBuf},
     sync::Mutex,
     sync::atomic::{AtomicUsize, Ordering},
@@ -176,6 +176,16 @@ fn oversized_warning(path: &Path, line_no: u64, bytes: u64, max_line: usize) -> 
     )
 }
 
+/// 进度条以 `\r` 重绘且不换行; TTY 下警告前补换行避免粘连,
+/// 非 TTY 无进度条, 直接输出以免多出空白行.
+fn warn_after_progress(msg: &str) {
+    if std::io::stderr().is_terminal() {
+        eprintln!("\n{msg}");
+    } else {
+        eprintln!("{msg}");
+    }
+}
+
 /// 行循环核心(私有): plain 与 zstd 两条入口共享
 ///
 /// reader 为已就绪的原始流, 核心内部套 64KB BufReader 后逐行消费;
@@ -268,7 +278,7 @@ fn for_each_line_core<R: Read>(
         if oversized {
             if !warned {
                 warned = true;
-                eprintln!("{}", oversized_warning(path, line_no, line_bytes, max_line));
+                warn_after_progress(&oversized_warning(path, line_no, line_bytes, max_line));
             }
             continue;
         }
