@@ -11,7 +11,7 @@ use serde_json::Value;
 use std::{
     ffi::OsStr,
     fs,
-    io::{BufRead, BufReader, Read},
+    io::{BufRead, BufReader, IsTerminal, Read},
     path::{Path, PathBuf},
     sync::Mutex,
     sync::atomic::{AtomicUsize, Ordering},
@@ -118,7 +118,8 @@ fn collect_dir(
     }
 }
 
-/// 单行字节上限: 正常日志单行为 KB~MB 级, 上限防损坏/异常巨型行把内存撑爆
+/// 单行字节上限: 正常日志单行为 KB~MB 级, 上限防损坏/异常巨型行把内存撑爆;
+/// 超限行整行跳过并警告, 后续行仍继续扫描(不是文件读取错误)
 const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
 
 /// 进度条刷新阈值: 消费字节累积达到该值才调用一次 progress.add(锁+节流时钟
@@ -146,7 +147,7 @@ pub fn for_each_jsonl_progress(
 /// - needle 过滤自首条成功解析的行之后生效: 首条有效 JSON 行总是回调
 ///   (pi 的 session header 校验,claude 的 sessionId 兜底依赖真实首行;
 ///   其余解析器对首行回调为无副作用 no-op)
-/// - 行超过 max_line 整行跳过并每文件警告一次, 继续消费到换行为止
+/// - 行超过 max_line 整行跳过并每文件警告一次(含行号/实际大小), 继续消费到换行为止
 /// - 畸形行/无效 UTF-8 行跳过(from_slice 语义与整读版逐字一致, 含 CRLF/末行无换行)
 /// - 文件打开/读失败返回 Err; 回调返回 false 提前终止
 /// - 进度按消费字节批报(与磁盘字节 1:1); zstd 压缩变体见
@@ -160,6 +161,29 @@ fn for_each_jsonl_impl(
 ) -> Result<(), AppError> {
     let file = fs::File::open(path).map_err(|e| io_err("open", path, e))?;
     for_each_line_core(path, file, needles, max_line, progress, on_line)
+}
+
+/// 超限行警告文案(纯函数, 便于单测)
+///
+/// 明确是安全上限而非读取错误, 并说明后续行仍会继续扫描.
+fn oversized_warning(path: &Path, line_no: u64, bytes: u64, max_line: usize) -> String {
+    format!(
+        ">_: {}: skipped oversized line {} ({} bytes > {} limit); later lines were still scanned",
+        path.display(),
+        line_no,
+        bytes,
+        max_line
+    )
+}
+
+/// 进度条以 `\r` 重绘且不换行; TTY 下警告前补换行避免粘连,
+/// 非 TTY 无进度条, 直接输出以免多出空白行.
+fn warn_after_progress(msg: &str) {
+    if std::io::stderr().is_terminal() {
+        eprintln!("\n{msg}");
+    } else {
+        eprintln!("{msg}");
+    }
 }
 
 /// 行循环核心(私有): plain 与 zstd 两条入口共享
@@ -178,12 +202,16 @@ fn for_each_line_core<R: Read>(
     let mut reader = BufReader::with_capacity(64 * 1024, reader);
     let mut line: Vec<u8> = Vec::new();
     let mut warned = false;
+    // 当前物理行号(1-based)与完整行字节数(含超限后继续消费的部分)
+    let mut line_no = 0u64;
     // needle 过滤门闩: 首条成功解析的行之前不过滤(见函数文档)
     let mut parsed_any = false;
     // 进度批报累积: 达 PROGRESS_REPORT_CHUNK 才上报一次, 退出前冲账剩余
     let mut pending = 0u64;
     loop {
+        line_no += 1;
         line.clear();
+        let mut line_bytes = 0u64;
         let mut oversized = false;
         let mut eof = true; // 本次行是否以 EOF 收尾(而非换行符)
         let mut any = false;
@@ -206,8 +234,10 @@ fn for_each_line_core<R: Read>(
                     } else {
                         oversized = true;
                     }
-                    reader.consume(nl + 1);
-                    pending += (nl + 1) as u64;
+                    let consumed = nl + 1;
+                    reader.consume(consumed);
+                    line_bytes += consumed as u64;
+                    pending += consumed as u64;
                 }
                 None => {
                     if !oversized && line.len() + buf.len() <= max_line {
@@ -217,6 +247,7 @@ fn for_each_line_core<R: Read>(
                     }
                     let len = buf.len();
                     reader.consume(len);
+                    line_bytes += len as u64;
                     pending += len as u64;
                     // 行未结束也按阈值冲账: 防无换行巨型行/文件期间进度条长期停滞
                     if pending >= PROGRESS_REPORT_CHUNK
@@ -247,10 +278,7 @@ fn for_each_line_core<R: Read>(
         if oversized {
             if !warned {
                 warned = true;
-                eprintln!(
-                    ">_: {}: line(s) over {max_line} bytes skipped",
-                    path.display(),
-                );
+                warn_after_progress(&oversized_warning(path, line_no, line_bytes, max_line));
             }
             continue;
         }
