@@ -139,6 +139,15 @@ fn test_for_each_jsonl_oversized_line_skipped() {
     assert_eq!(rows[0]["ok"], 1);
 }
 
+#[test]
+fn test_oversized_warning_format() {
+    let msg = oversized_warning(Path::new("/tmp/f.jsonl"), 619, 21_294_633, MAX_LINE_BYTES);
+    assert!(msg.contains("skipped oversized line 619"));
+    assert!(msg.contains("21294633 bytes"));
+    assert!(msg.contains("16777216 limit"));
+    assert!(msg.contains("later lines were still scanned"));
+}
+
 /// 参考实现(旧 windows 全位置 memcmp 版), 用于等价性对照
 fn reference_contains(line: &[u8], needle: &[u8]) -> bool {
     !needle.is_empty() && line.windows(needle.len()).any(|w| w == needle)
