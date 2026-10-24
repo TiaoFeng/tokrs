@@ -9,14 +9,17 @@
 //! 每个请求完成时由 `["requests", i, "promptTokens"/"completionTokens"]` 的 set 操作
 //! 流式写入用量(末值为准), 未完成/取消的请求永不写入 -> 天然跳过.
 //! 解析只追踪 requests 子路径(轻量 replay), 其余路径(inputState/customTitle/response等)一概忽略;
-//! response 巨型推送行除 Auto 解析片段外不含 needle 字面量, 零解析跳过
+//! response/result 巨型推送行除 Auto 解析片段外不含 needle 字面量, 零解析跳过;
+//! 单行超过 16MiB 时由 io/load 跳过该行, token 仍由独立的 set 行写入
 //!
 //! 语义:
 //! - input 直用 promptTokens(上游未暴露缓存拆分, 无法归一, cache 恒 0,
 //!   不经 fresh_input);
 //! - output 为 completionTokens; 无自报成本, 交由定价表估价;
-//! - copilot/auto(Auto 模式)的实际模型经响应流中 autoModeResolution 片段还原
-//!   (resolved.id, 末次为准), 缺失时按 "auto" 兜底;
+//! - copilot/auto(Auto 模式)的实际模型优先取响应流中 autoModeResolution 片段
+//!   (resolved.id, 末次为准), 缺失时回退 result.metadata.resolvedModel
+//!   (VS Code 结果元数据, 末次为准), 再缺失按 "auto" 兜底;
+//!   明确 modelId 不被上述解析结果覆盖;
 //! - modelId 先经 decode_model_id 解码 VS Code 标识
 //!   (取模型段并剥扩展命名空间/variant 装饰)再经 apps::normalize_model 统一归一
 //!
@@ -44,18 +47,21 @@ const MAX_DEPTH: usize = 2;
 
 /// 行级预过滤 needle
 ///
-/// 五个均为结构字面量(JSON 转义保证不会命中字符串内容):
+/// 结构字面量预过滤(非严格保证: tool 输出文本也可能含相同字面量,
+/// 误命中只会多解析该行, 不影响正确性):
 /// - 请求表推送 `["requests"]`, token/模型字段的 set 操作
 ///   (如 `["requests",0,"promptTokens"]`),
-///   携带 Auto 解析的响应片段(`autoModeResolution`);
-/// - 其余 response 巨型推送行不匹配任一 needle -> 零解析跳过.
+///   携带 Auto 解析的响应片段(`autoModeResolution`)与结果元数据
+///   (`resolvedModel`);
+/// - 其余 response/result 巨型推送行不匹配任一 needle -> 零解析跳过.
 /// - 首行 init 由 load 的首行不过滤规则保障(sessionId/creationDate 兜底依赖它)
-const COPILOT_LINE_NEEDLES: [&str; 5] = [
+const COPILOT_LINE_NEEDLES: [&str; 6] = [
     "[\"requests\"]",
     "\"promptTokens\"",
     "\"completionTokens\"",
     "\"modelId\"",
     "\"autoModeResolution\"",
+    "\"resolvedModel\"",
 ];
 
 /// 操作类型(操作日志的 kind 字段) 0 初始状态 / 1 设置路径值 / 2 数组插入
@@ -89,6 +95,29 @@ fn decode_model_id(raw: &str) -> String {
         Some((ns, rest)) if !rest.is_empty() && ns.eq_ignore_ascii_case(vendor) => rest.to_string(),
         _ => model.to_string(),
     }
+}
+
+/// 是否为 Auto 占位模型(解码后为 auto, 大小写不敏感)
+fn is_auto_model(raw: &str) -> bool {
+    decode_model_id(raw).eq_ignore_ascii_case("auto")
+}
+
+/// 选择最终模型原始字符串(尚未 decode/normalize)
+///
+/// 明确 modelId 优先, 不被 response/result 的 Auto 解析结果覆盖
+/// (实测 customendpoint 请求的 result.metadata 可能残留旧的 auto 解析值);
+/// 仅 auto 或 modelId 缺失时采用解析结果, 优先级 response > result > 原值.
+fn effective_model(skeleton: &Skeleton) -> Option<&str> {
+    if let Some(model) = skeleton.model.as_deref()
+        && !is_auto_model(model)
+    {
+        return Some(model);
+    }
+    skeleton
+        .resolved_model
+        .as_deref()
+        .or(skeleton.result_model.as_deref())
+        .or(skeleton.model.as_deref())
 }
 
 pub fn collect(threads: Option<usize>) -> Result<Vec<UsageEntry>, AppError> {
@@ -170,6 +199,8 @@ struct Skeleton {
     model: Option<String>,
     /// Auto 模式实际模型(响应片段 autoModeResolution 的 resolved.id)
     resolved_model: Option<String>,
+    /// 结果元数据中的实际模型(result.metadata.resolvedModel, 仅 Auto 兜底)
+    result_model: Option<String>,
     timestamp: Option<i64>,
     response_timestamp: Option<i64>,
     prompt_tokens: u64,
@@ -183,6 +214,7 @@ impl Skeleton {
             request_id: load::str_get_nonempty(value, &["requestId"]).map(str::to_string),
             model: load::str_get_nonempty(value, &["modelId"]).map(str::to_string),
             resolved_model: None,
+            result_model: None,
             timestamp: value.get("timestamp").and_then(load::timestamp_to_epoch),
             response_timestamp: value
                 .get("responseTimestamp")
@@ -192,6 +224,9 @@ impl Skeleton {
         };
         if let Some(parts) = value.get("response").and_then(Value::as_array) {
             skeleton.absorb_response(parts);
+        }
+        if let Some(result) = value.get("result") {
+            skeleton.absorb_result(result);
         }
         skeleton
     }
@@ -204,6 +239,16 @@ impl Skeleton {
             {
                 self.resolved_model = Some(id.to_string());
             }
+        }
+    }
+
+    /// 从结果元数据提取实际模型(result.metadata.resolvedModel, 末次为准)
+    ///
+    /// 部分会话没有 autoModeResolution 响应片段, 只在此字段保留实际模型;
+    /// 仅作为 Auto 的兜底, 明确 modelId 不采用它(见 effective_model).
+    fn absorb_result(&mut self, value: &Value) {
+        if let Some(id) = load::str_get_nonempty(value, &["metadata", "resolvedModel"]) {
+            self.result_model = Some(id.to_string());
         }
     }
 }
@@ -264,6 +309,12 @@ impl Replay {
                             self.slot(idx).absorb_response(parts);
                         }
                     }
+                    // 整表替换结果元数据: 吸收 result.metadata.resolvedModel
+                    "result" => {
+                        if let Some(value) = op.get("v") {
+                            self.slot(idx).absorb_result(value);
+                        }
+                    }
                     _ => self.set_field(idx, field, op),
                 }
             }
@@ -304,6 +355,12 @@ impl Replay {
                 };
                 self.slot(idx).absorb_response(parts);
             }
+            [_, idx, field] if field.as_str() == Some("result") => {
+                let (Some(idx), Some(value)) = (idx.as_u64(), op.get("v")) else {
+                    return;
+                };
+                self.slot(idx).absorb_result(value);
+            }
             _ => {}
         }
     }
@@ -338,7 +395,8 @@ impl Replay {
     /// 产出用量条目
     ///
     /// - 跳过未完成(无 token)与全零请求;
-    /// - 模型优先级: Auto 解析结果 > 原始 modelId, 再统一解码/归一;
+    /// - 模型优先级: 明确 modelId > Auto 解析结果(response > result > auto),
+    ///   再统一解码/归一;
     /// - 键 = requestId 兜底 `stem:索引`, 文件内重复先到者入账
     fn into_entries(self, stem: &str) -> HashMap<String, UsageEntry> {
         let Replay {
@@ -362,18 +420,15 @@ impl Replay {
             else {
                 continue;
             };
+            // 模型优先级: 明确 modelId > Auto 解析结果; 先算模型再移动 requestId
+            // (effective_model 借用整个 skeleton, 不能在其后部分移动字段)
+            let model = effective_model(&skeleton).map_or_else(
+                || "unknown".to_string(),
+                |raw| normalize_model(&decode_model_id(raw)),
+            );
             let key = skeleton
                 .request_id
                 .unwrap_or_else(|| format!("{stem}:{idx}"));
-            // 模型优先级: Auto 解析结果 > 原始 modelId; 统一解码/归一
-            let model = skeleton
-                .resolved_model
-                .as_deref()
-                .or(skeleton.model.as_deref())
-                .map_or_else(
-                    || "unknown".to_string(),
-                    |raw| normalize_model(&decode_model_id(raw)),
-                );
             candidates.entry(key).or_insert_with(|| {
                 UsageEntry::new(
                     AppKind::Copilot,
